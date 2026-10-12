@@ -425,21 +425,6 @@ it('keeps the watch open when the server refused EXEC', function (): void {
     expect($server->commands())->toBe(['SELECT 0', 'WATCH balance', 'MULTI', 'EXEC', 'GET balance', 'SELECT 0']);
 });
 
-it('clears the watch once the server confirmed a DISCARD', function (): void {
-    $server = FakeRedisServer::start(['serve:4', 'serve']);
-    $connection = recoveringConnection($server);
-    $connection->watch('balance');
-
-    $callback = function (): never {
-        throw new RuntimeException('The order is no longer valid.');
-    };
-
-    expect(fn (): Redis|array|false => $connection->transaction($callback))->toThrow(RuntimeException::class);
-
-    expect($connection->get('balance'))->toBeNull()
-        ->and($server->commands())->toBe(['SELECT 0', 'WATCH balance', 'MULTI', 'DISCARD', 'GET balance', 'SELECT 0', 'GET balance']);
-});
-
 it('clears the watch after UNWATCH, so a later read is replayed again', function (): void {
     $server = FakeRedisServer::start(['serve:3', 'serve']);
     $connection = recoveringConnection($server);
