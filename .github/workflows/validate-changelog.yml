@@ -1,0 +1,29 @@
+name: Validate changelog
+
+# Reusable body for the changelog-header validation. The orchestrator (ci.yml)
+# owns the event routing and the needs DAG. This file carries only the job body
+# so the orchestrator stays readable.
+
+on:
+  workflow_call:
+
+jobs:
+  validate:
+    name: Validate changelog header
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check top header shape
+        run: |
+          set -euo pipefail
+          header=$(grep -m1 -E '^## ' CHANGELOG.md || true)
+          if [[ -z "$header" ]]; then
+            echo "::error file=CHANGELOG.md::CHANGELOG.md has no '## ' header"
+            exit 1
+          fi
+          if ! [[ "$header" =~ ^##\ v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error file=CHANGELOG.md::Top header must be '## vX.Y.Z' exactly (got: $header)"
+            exit 1
+          fi
+          echo "OK: $header"

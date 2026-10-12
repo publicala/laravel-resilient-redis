@@ -1,0 +1,140 @@
+name: Tests
+
+# Reusable body for the test matrix. The orchestrator (ci.yml) owns the event
+# routing and the needs DAG. This file carries only the job bodies so the
+# orchestrator stays readable.
+#
+# The suite drives real phpredis clients against a scripted server it starts
+# itself, plus a real Valkey for the paths a script cannot fake (CLIENT KILL,
+# persistent pools).
+
+on:
+  workflow_call:
+
+jobs:
+  gate:
+    # The full gate runs once: the package branches on the installed Laravel
+    # version (the lost-connection backport, CommandFailed), so 100% line
+    # coverage holds on the latest version only. The matrix below runs the
+    # same suite everywhere else.
+    name: Gate · PHP 8.4 · Laravel 13
+    runs-on: depot-ubuntu-24.04
+    services:
+      valkey:
+        image: valkey/valkey:8.1
+        ports: ['6390:6379']
+        options: --health-cmd "valkey-cli ping" --health-interval 2s --health-timeout 2s --health-retries 15
+    env:
+      REDIS_TEST_PORT: 6390
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup PHP (static + pcov)
+        uses: publicala/php-ci-static@a5c8319fbd0616bd8a707464f1b755e63aa31bed # v1
+        with:
+          php-version: '8.4'
+          coverage: pcov
+
+      - run: php -r 'echo "phpredis ", phpversion("redis"), PHP_EOL;'
+
+      - run: composer update --no-interaction --prefer-dist
+
+      - name: Pint + Rector (check only)
+        run: composer run-script test:lint
+
+      - name: PHPStan (level 8)
+        run: composer run-script test:types
+
+      - name: Type coverage (100%)
+        run: composer run-script test:type-coverage
+
+      - name: Code coverage (100%)
+        run: composer run-script test:coverage
+
+  matrix:
+    name: PHP ${{ matrix.php }} · Laravel ${{ matrix.laravel }}
+    runs-on: depot-ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.3', '8.4', '8.5']
+        laravel: ['11.*', '12.*', '13.*']
+        exclude:
+          # Laravel 11 does not support PHP 8.5.
+          - php: '8.5'
+            laravel: '11.*'
+        include:
+          # The releases where Laravel's own lost-connection handling changes:
+          # 13.27 has none, 13.28 retries reads, 13.31 adds TLS resets, 13.33
+          # adds pipelines and transactions.
+          - { php: '8.4', laravel: '13.27.*' }
+          - { php: '8.4', laravel: '13.28.*' }
+          - { php: '8.4', laravel: '13.31.*' }
+          - { php: '8.4', laravel: '13.33.*' }
+          # The oldest release of each major that a known consumer runs.
+          - { php: '8.3', laravel: '11.48.*' }
+          - { php: '8.4', laravel: '12.64.*' }
+          - { php: '8.4', laravel: '13.23.*' }
+    services:
+      valkey:
+        image: valkey/valkey:8.1
+        ports: ['6390:6379']
+        options: --health-cmd "valkey-cli ping" --health-interval 2s --health-timeout 2s --health-retries 15
+    env:
+      REDIS_TEST_PORT: 6390
+      # Every Laravel 11 release, and the older pinned releases, carry a security
+      # advisory. The package supports what its users run, so test them anyway.
+      COMPOSER_NO_SECURITY_BLOCKING: 1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup PHP (static)
+        uses: publicala/php-ci-static@a5c8319fbd0616bd8a707464f1b755e63aa31bed # v1
+        with:
+          php-version: ${{ matrix.php }}
+
+      - name: Install dependencies
+        run: |
+          composer require --no-interaction --no-update --dev "laravel/framework:${{ matrix.laravel }}"
+          composer update --no-interaction --prefer-dist --with-all-dependencies
+
+      - run: composer show --direct
+
+      - run: vendor/bin/pest
+
+  phpredis:
+    # php-ci-static bundles one phpredis release, and the failure messages
+    # this package matches come from phpredis, so each supported release gets
+    # its own run. setup-php is the only installer that pins a PECL version.
+    name: phpredis ${{ matrix.phpredis }} · PHP ${{ matrix.php }}
+    runs-on: depot-ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # phpredis 6.0 does not build against PHP 8.4.
+          - { phpredis: '6.0.2', php: '8.3' }
+          - { phpredis: '6.1.0', php: '8.4' }
+          - { phpredis: '6.2.0', php: '8.4' }
+          - { phpredis: '6.3.0', php: '8.4' }
+    services:
+      valkey:
+        image: valkey/valkey:8.1
+        ports: ['6390:6379']
+        options: --health-cmd "valkey-cli ping" --health-interval 2s --health-timeout 2s --health-retries 15
+    env:
+      REDIS_TEST_PORT: 6390
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: redis-${{ matrix.phpredis }}, sockets, pcntl
+          coverage: none
+
+      - run: php -r 'echo "phpredis ", phpversion("redis"), PHP_EOL;'
+
+      - run: composer update --no-interaction --prefer-dist
+
+      - run: vendor/bin/pest

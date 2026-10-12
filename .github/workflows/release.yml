@@ -1,0 +1,143 @@
+name: Release
+
+# Reusable body for the release cut. The orchestrator (ci.yml) owns the event
+# routing, the needs DAG, the green-CI gate and the ref hard-gate. This file
+# carries only the job body so the orchestrator stays readable. The caller
+# grants contents: write, since a called workflow only receives what the caller
+# grants.
+
+on:
+  workflow_call:
+
+jobs:
+  release:
+    name: Cut release
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history so we can peel vX.Y.Z to its introduction commit locally.
+          fetch-depth: 0
+
+      - name: Read top version
+        id: ver
+        run: |
+          set -euo pipefail
+          version=$(grep -m1 -E '^## v[0-9]+\.[0-9]+\.[0-9]+$' CHANGELOG.md | sed 's/^## v//')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Top version: v$version"
+
+      - name: Find introduction commit for this version
+        id: intro
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Walk main's own CHANGELOG.md history oldest→newest (first parent, so a
+          # merge commit counts as the change rather than its feature branch). The introduction commit
+          # is the first one where the top `## vX.Y.Z` header equals VERSION
+          # (i.e., the transition from "previous version at top" to "VERSION
+          # at top"). This lets workflow_dispatch on main cut a release for a
+          # version whose merge commit is no longer HEAD — necessary because
+          # the safety gate restricts the job to refs/heads/main, and
+          # `--ref <older-commit>` would otherwise be blocked.
+          release_sha=""
+          prev=""
+          while IFS= read -r sha; do
+            v=$(git show "$sha:CHANGELOG.md" 2>/dev/null \
+              | grep -m1 -E '^## v[0-9]+\.[0-9]+\.[0-9]+$' \
+              | sed 's/^## v//' || true)
+            if [[ -z "$v" ]]; then continue; fi
+            if [[ "$prev" != "$VERSION" && "$v" == "$VERSION" ]]; then
+              release_sha=$sha
+            fi
+            prev=$v
+          done < <(git log --reverse --first-parent --format=%H -- CHANGELOG.md)
+
+          if [[ -z "$release_sha" ]]; then
+            echo "::error file=CHANGELOG.md::Could not find commit where v$VERSION was introduced at the top of CHANGELOG.md. Aborting."
+            exit 1
+          fi
+          echo "sha=$release_sha" >> "$GITHUB_OUTPUT"
+          echo "Release commit for v$VERSION: $release_sha"
+
+      - name: Check immutable tag state
+        id: tag
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          RELEASE_SHA: ${{ steps.intro.outputs.sha }}
+        run: |
+          set -euo pipefail
+          # Three outcomes, compared against the introduction commit (not
+          # GITHUB_SHA, since dispatches on main may run from HEAD past the
+          # release commit):
+          #   absent            → create the tag at RELEASE_SHA
+          #   present_here      → tag already at RELEASE_SHA. Reconcile
+          #                       downstream artifacts (release).
+          #                       Partial-failure recovery path.
+          #   present_elsewhere → tag exists at a different commit. This is
+          #                       an out-of-band state we don't want to
+          #                       paper over → no-op the whole job.
+          if ! git rev-parse --verify "refs/tags/v$VERSION" >/dev/null 2>&1; then
+            echo "state=absent" >> "$GITHUB_OUTPUT"
+            echo "v$VERSION does not exist yet — will create at $RELEASE_SHA."
+            exit 0
+          fi
+          tag_commit=$(git rev-list -n 1 "v$VERSION")
+          if [[ "$tag_commit" == "$RELEASE_SHA" ]]; then
+            echo "state=present_here" >> "$GITHUB_OUTPUT"
+            echo "v$VERSION already at $RELEASE_SHA — reconciling downstream artifacts."
+          else
+            echo "state=present_elsewhere" >> "$GITHUB_OUTPUT"
+            echo "v$VERSION already at $tag_commit (introduction commit is $RELEASE_SHA) — out-of-band state, no-op."
+          fi
+
+      - name: Extract release notes
+        if: steps.tag.outputs.state != 'present_elsewhere'
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          awk -v ver="$VERSION" '
+            BEGIN { capture = 0 }
+            /^## / {
+              if (capture) exit
+              if ($0 == "## v" ver) { capture = 1; next }
+            }
+            capture { print }
+          ' CHANGELOG.md \
+            | awk 'NF { found=1 } found' \
+            | awk '{ lines[NR] = $0 } END { last = NR; while (last > 0 && lines[last] == "") last--; for (i = 1; i <= last; i++) print lines[i] }' \
+            > release-notes.md
+          echo "::group::release-notes.md"
+          cat release-notes.md
+          echo "::endgroup::"
+
+      - name: Create immutable tag
+        if: steps.tag.outputs.state == 'absent'
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          RELEASE_SHA: ${{ steps.intro.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v$VERSION" -m "v$VERSION" "$RELEASE_SHA"
+          git push origin "v$VERSION"
+          echo "Tagged v$VERSION at $RELEASE_SHA"
+
+      - name: Create GitHub Release
+        if: steps.tag.outputs.state != 'present_elsewhere'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "Release v$VERSION already exists — no-op"
+            exit 0
+          fi
+          gh release create "v$VERSION" \
+            --title "v$VERSION" \
+            --notes-file release-notes.md
+          echo "Published release v$VERSION"

@@ -1,0 +1,7 @@
+vendor
+node_modules
+build
+dist
+
+# Generated and vendored Markdown
+CHANGELOG.md

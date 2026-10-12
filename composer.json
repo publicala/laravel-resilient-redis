@@ -1,0 +1,92 @@
+{
+    "name": "publicala/laravel-resilient-redis",
+    "description": "Retry transient phpredis connect failures in Laravel, and give Laravel 11 and 12 the lost-connection handling Laravel 13 ships.",
+    "keywords": [
+        "laravel",
+        "redis",
+        "valkey",
+        "phpredis",
+        "retry",
+        "resilience",
+        "reconnect",
+        "tls"
+    ],
+    "homepage": "https://github.com/publicala/laravel-resilient-redis",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "publica.la",
+            "homepage": "https://publica.la"
+        }
+    ],
+    "require": {
+        "php": "^8.3",
+        "ext-redis": "^6.0",
+        "illuminate/contracts": "^11.0|^12.0|^13.0",
+        "illuminate/redis": "^11.0|^12.0|^13.0",
+        "illuminate/support": "^11.0|^12.0|^13.0"
+    },
+    "require-dev": {
+        "driftingly/rector-laravel": "^2.0",
+        "larastan/larastan": "^3.0",
+        "laravel/pint": "^1.0",
+        "orchestra/testbench": "^9.0|^10.0|^11.0",
+        "pestphp/pest": "^3.0|^4.0|^5.0",
+        "pestphp/pest-plugin-type-coverage": "^3.0|^4.0|^5.0",
+        "rector/rector": "^2.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Publicala\\ResilientRedis\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Publicala\\ResilientRedis\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Publicala\\ResilientRedis\\ResilientRedisServiceProvider"
+            ]
+        }
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    },
+    "scripts": {
+        "lint": [
+            "vendor/bin/rector process",
+            "vendor/bin/pint"
+        ],
+        "test:lint": [
+            "vendor/bin/pint --test",
+            "vendor/bin/rector process --dry-run"
+        ],
+        "test:types": "vendor/bin/phpstan analyse --memory-limit=512M",
+        "test:type-coverage": "@php -d memory_limit=1G vendor/bin/pest --type-coverage --min=100",
+        "test:unit": "vendor/bin/pest",
+        "test:coverage": "vendor/bin/pest --coverage --min=100",
+        "test": [
+            "@test:type-coverage",
+            "@test:types",
+            "@test:lint",
+            "@test:coverage"
+        ]
+    },
+    "scripts-descriptions": {
+        "lint": "Apply Rector + Pint fixes",
+        "test:lint": "Check formatting (Pint) and transforms (Rector) without writing",
+        "test:types": "PHPStan (level 8, Larastan)",
+        "test:type-coverage": "Pest type coverage, must be 100%",
+        "test:unit": "Run the Pest suite (needs a Valkey or Redis server on port 6390, see tests/CLAUDE.md)",
+        "test:coverage": "Run the Pest suite with 100% code coverage required (needs a coverage driver)",
+        "test": "Full gate: type coverage, static analysis, lint, and 100% code coverage"
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
