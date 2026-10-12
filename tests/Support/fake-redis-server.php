@@ -13,7 +13,8 @@ declare(strict_types=1);
  *   serve                 answer every command
  *   serve:N               answer N commands, then close the socket (FIN)
  *   serve-then-reset:N    answer N commands, then reset the socket (RST) when the next one arrives
- *   serve-rejecting:N:CMD answer N commands like serve:N, refusing CMD with a NOPERM error
+ *   serve-rejecting:N:CMD answer N commands like serve:N, refusing CMD with a NOPERM error (phpredis throws)
+ *   serve-unknown:N:CMD   answer N commands like serve:N, answering CMD with "ERR unknown command" (phpredis returns false)
  *   serve-then-drop:N     answer N commands, then reset the idle socket before the next one is sent
  *   reset                 reset (RST) right after accepting
  *   close-on-first-read   wait for the first bytes (a TLS ClientHello or a command), then close (FIN)
@@ -165,7 +166,7 @@ while (true) {
             }
 
             if ($limit !== null && $kind !== 'serve-then-drop' && $client['answered'] >= (int) $limit) {
-                if ($kind === 'serve' || $kind === 'serve-rejecting') {
+                if (in_array($kind, ['serve', 'serve-rejecting', 'serve-unknown'], true)) {
                     fclose($stream);
                     unset($clients[(int) $stream]);
 
@@ -185,9 +186,11 @@ while (true) {
                 continue;
             }
 
-            fwrite($stream, $kind === 'serve-rejecting' && $name === $message
-                ? "-NOPERM this user has no permissions to run the '".strtolower($name)."' command\r\n"
-                : respond($client, $name, array_slice($arguments, 1), $store));
+            fwrite($stream, match (true) {
+                $kind === 'serve-rejecting' && $name === $message => "-NOPERM this user has no permissions to run the '".strtolower($name)."' command\r\n",
+                $kind === 'serve-unknown' && $name === $message => "-ERR unknown command '".strtolower($name)."'\r\n",
+                default => respond($client, $name, array_slice($arguments, 1), $store),
+            });
             $client['answered']++;
 
             if ($kind === 'serve-then-drop' && $client['answered'] >= (int) $limit) {

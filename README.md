@@ -47,7 +47,7 @@ A connection with no `timeout` gets one of 2 seconds. Without it, a connect to a
 Laravel 13.28 and later rebuild a phpredis client that loses its connection mid-command and run a read once more. On earlier versions the package does the same, more conservatively:
 
 - **Reads only.** A read (`GET`, `HGETALL`, `ZRANGE` and the like) runs once more on the rebuilt client. A write (`SET`, `INCR`, `EVAL`, a queue push) is never replayed, because the server may have run it before the reply was lost. The client is still rebuilt, so the next command works.
-- **Never inside a WATCH, a MULTI or a pipeline.** The watch dies with the old socket, and a queued command would run outside its batch, so the error is rethrown after the rebuild.
+- **Never inside a WATCH, a MULTI or a pipeline.** The watch dies with the old socket, and a queued command would run outside its batch, so the error is rethrown after the rebuild. When the package cannot tell whether a WATCH is still open (one a pipeline sent, or an UNWATCH a pipeline queued), it treats the watch as open, which only costs the replay.
 - **The rebuilt client keeps its state.** The prefix, serializer and compression a caller set at runtime, and a database chosen with `SELECT`, carry over. `withoutSerializationOrCompression()` stays raw across a rebuild.
 - **The original error wins.** When the rebuild itself fails, the command's own error is rethrown, since for a write it is the one that says the server may have applied it.
 

@@ -399,6 +399,21 @@ it('treats a WATCH sent by a pipeline that failed as open', function (): void {
     expect($server->commands())->toBe(['SELECT 0', 'WATCH balance', 'SET balance 1', 'GET balance', 'SELECT 0']);
 });
 
+it('keeps the watch open when a pipeline queued an UNWATCH the server refused', function (): void {
+    $server = FakeRedisServer::start(['serve-unknown:3:UNWATCH', 'serve']);
+    $connection = recoveringConnection($server);
+    $connection->watch('balance');
+
+    $callback = function () use ($connection): void {
+        $connection->unwatch();
+    };
+
+    expect($connection->pipeline($callback))->toBe([false]);
+    expect(fn () => $connection->get('balance'))->toThrowLostConnection();
+
+    expect($server->commands())->toBe(['SELECT 0', 'WATCH balance', 'UNWATCH', 'GET balance', 'SELECT 0']);
+});
+
 it('clears the watch after UNWATCH, so a later read is replayed again', function (): void {
     $server = FakeRedisServer::start(['serve:3', 'serve']);
     $connection = recoveringConnection($server);

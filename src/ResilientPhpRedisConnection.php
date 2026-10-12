@@ -57,11 +57,9 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
     private ?int $selectedDatabase = null;
 
     /**
-     * The WATCH and UNWATCH calls queued in the open MULTI or pipeline, which take effect only if it runs.
-     *
-     * @var list<string>
+     * Whether the open MULTI or pipeline queued a WATCH, which may have reached the server whatever the batch's outcome.
      */
-    private array $queuedWatchChanges = [];
+    private bool $watchQueued = false;
 
     /**
      * @param  Redis  $client
@@ -229,7 +227,7 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
         } catch (Throwable $throwable) {
             // A rebuild inside the callback already reset the session state, which now belongs to the new client.
             if ($batch === $this->client) {
-                $this->settleBatch(ran: false, transaction: $transaction);
+                $this->settleBatch($transaction);
             }
 
             // phpredis reconnects a failed client to send DISCARD, so a client whose socket is gone is left alone.
@@ -246,7 +244,7 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
         }
 
         if ($batch === $this->client) {
-            $this->settleBatch(ran: is_array($result), transaction: $transaction);
+            $this->settleBatch($transaction);
         }
 
         return $result;
@@ -257,7 +255,7 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
         $this->rememberDatabase();
 
         if ($method === 'exec' || $method === 'discard') {
-            $this->settleBatch(ran: $method === 'exec' && is_array($result), transaction: $mode === Redis::MULTI);
+            $this->settleBatch(transaction: $mode === Redis::MULTI);
 
             return;
         }
@@ -266,8 +264,9 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
             return;
         }
 
+        // A batched UNWATCH is never trusted to close the watch: its own reply is not known until EXEC, and may be an error.
         if ($mode !== Redis::ATOMIC) {
-            $this->queuedWatchChanges[] = $method;
+            $this->watchQueued = $this->watchQueued || $method === 'watch';
 
             return;
         }
@@ -276,21 +275,16 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
     }
 
     /**
-     * Apply the WATCH changes the batch queued if it ran, and drop them either way.
+     * Settle the WATCH state once a batch ends.
      *
-     * A pipeline that failed may have run its WATCH before the failing
-     * command, so its WATCH counts as open until known otherwise. EXEC
-     * and DISCARD end a MULTI's WATCH whatever the outcome.
+     * A WATCH the batch queued counts as open whatever the outcome, since
+     * a failed pipeline may have sent it before the failing command. EXEC
+     * and DISCARD end a MULTI's WATCH, while a pipeline leaves it open.
      */
-    private function settleBatch(bool $ran, bool $transaction): void
+    private function settleBatch(bool $transaction): void
     {
-        if ($ran && $this->queuedWatchChanges !== []) {
-            $this->watching = last($this->queuedWatchChanges) === 'watch';
-        } elseif (in_array('watch', $this->queuedWatchChanges, true)) {
-            $this->watching = true;
-        }
-
-        $this->queuedWatchChanges = [];
+        $this->watching = $this->watching || $this->watchQueued;
+        $this->watchQueued = false;
 
         if ($transaction) {
             $this->watching = false;
@@ -333,7 +327,7 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
         }
 
         $this->watching = false;
-        $this->queuedWatchChanges = [];
+        $this->watchQueued = false;
 
         try {
             $client = call_user_func($this->connector);
