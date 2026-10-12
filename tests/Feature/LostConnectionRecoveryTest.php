@@ -44,7 +44,8 @@ it('runs a read once more on a rebuilt client when the server drops the connecti
         ->and($server->commands())->toBe(['SELECT 0', 'SET greeting hello', 'GET greeting', 'SELECT 0', 'GET greeting'])
         ->and($reported)->toHaveCount(1)
         ->and($reported[0])->toBeInstanceOf(CommandRecovered::class)
-        ->and($reported[0]->context())->toMatchArray(['connection' => 'cache', 'command' => 'get', 'reason' => 'read_error']);
+        ->and($reported[0]->context())->toMatchArray(['connection' => 'cache', 'command' => 'get'])
+        ->and($reported[0]->reason)->toBeIn(['read_error', 'connection_lost']);
 })->with([
     'connect' => false,
     'pconnect' => true,
@@ -74,7 +75,7 @@ it('rebuilds the client again and gives up when the replayed read loses its conn
     $reported = [];
     $connection = recoveringConnection($server, $reported);
 
-    expect(fn () => $connection->get('greeting'))->toThrow(RedisException::class, 'read error on connection');
+    expect(fn () => $connection->get('greeting'))->toThrowLostConnection();
 
     expect($server->commands())->toBe(['SELECT 0', 'GET greeting', 'SELECT 0', 'GET greeting', 'SELECT 0'])
         ->and($connection->ping())->toBeTrue()
@@ -98,7 +99,7 @@ it('rethrows the command failure when the rebuild fails, since a lost write repl
 
     $connection = new ResilientPhpRedisConnection($client, fn () => throw new RuntimeException('Valkey is unreachable.'), []);
 
-    expect(fn () => $connection->set('job', 'payload'))->toThrow(RedisException::class, 'read error on connection');
+    expect(fn () => $connection->set('job', 'payload'))->toThrowLostConnection();
 });
 
 it('rethrows a lost connection as is when no connector can rebuild the client', function (): void {
@@ -109,7 +110,7 @@ it('rethrows a lost connection as is when no connector can rebuild the client', 
 
     $connection = new ResilientPhpRedisConnection($client, null, []);
 
-    expect(fn () => $connection->get('greeting'))->toThrow(RedisException::class, 'read error on connection');
+    expect(fn () => $connection->get('greeting'))->toThrowLostConnection();
 
     expect($connection->client())->toBe($client)
         ->and($server->commands())->toBe(['SELECT 0', 'GET greeting']);
@@ -120,7 +121,7 @@ it('never replays a read while a WATCH is open, because the watch died with the 
     $connection = recoveringConnection($server);
     $connection->watch('balance');
 
-    expect(fn () => $connection->get('balance'))->toThrow(RedisException::class, 'read error on connection');
+    expect(fn () => $connection->get('balance'))->toThrowLostConnection();
 
     expect($server->commands())->toBe(['SELECT 0', 'WATCH balance', 'GET balance', 'SELECT 0']);
 });
@@ -157,7 +158,7 @@ it('gives up on a transaction whose MULTI loses the connection twice', function 
     $connection = recoveringConnection($server);
 
     expect(fn (): Redis|array|false => $connection->transaction(fn (Redis $transaction): Redis|string|bool => $transaction->set('job', 'payload')))
-        ->toThrow(RedisException::class, 'read error on connection');
+        ->toThrowLostConnection();
 
     expect($server->commands())->toBe(['SELECT 0', 'MULTI', 'SELECT 0', 'MULTI', 'SELECT 0'])
         ->and($connection->ping())->toBeTrue();
@@ -185,7 +186,7 @@ it('does not replay a read that a transaction queued through the connection', fu
 
     expect(fn (): Redis|array|false => $connection->transaction(function () use ($connection): void {
         $connection->get('greeting');
-    }))->toThrow(RedisException::class, 'read error on connection');
+    }))->toThrowLostConnection();
 
     expect($server->commands())->toBe(['SELECT 0', 'MULTI', 'GET greeting', 'SELECT 0'])
         ->and($connection->ping())->toBeTrue();
@@ -259,7 +260,7 @@ it('rethrows the read failure when the rebuilt client cannot select the database
     $connection = recoveringConnection($server);
     $connection->select(3);
 
-    expect(fn () => $connection->get('greeting'))->toThrow(RedisException::class, 'read error on connection');
+    expect(fn () => $connection->get('greeting'))->toThrowLostConnection();
 });
 
 it('clears the watch after UNWATCH, so a later read is replayed again', function (): void {

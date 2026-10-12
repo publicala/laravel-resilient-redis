@@ -43,8 +43,8 @@ it('retries a connect whose pooled socket the server dropped, and reports the re
             'database' => 0,
             'persistent' => $persistent,
             'attempts' => 2,
-            'reason' => 'read_error',
-        ]);
+        ])
+        ->and($reported[0]->reason)->toBeIn(['read_error', 'connection_lost']);
 })->with([
     'connect' => false,
     'pconnect' => true,
@@ -70,7 +70,7 @@ it('gives up after three attempts with a jittered wait between them, and reports
     });
 
     expect(fn (): PhpRedisConnection => connectorReportingTo($reported)->connect($server->config(), []))
-        ->toThrow(RedisException::class, 'read error on connection');
+        ->toThrowLostConnection();
 
     expect($server->acceptedConnections())->toBe(3)
         ->and($waits)->toHaveCount(2)

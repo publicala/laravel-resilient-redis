@@ -82,6 +82,9 @@ jobs:
         options: --health-cmd "valkey-cli ping" --health-interval 2s --health-timeout 2s --health-retries 15
     env:
       REDIS_TEST_PORT: 6390
+      # Every Laravel 11 release, and the older pinned releases, carry a security
+      # advisory. The package supports what its users run, so test them anyway.
+      COMPOSER_NO_SECURITY_BLOCKING: 1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -95,7 +98,7 @@ jobs:
           composer require --no-interaction --no-update --dev "laravel/framework:${{ matrix.laravel }}"
           composer update --no-interaction --prefer-dist --with-all-dependencies
 
-      - run: composer show laravel/framework orchestra/testbench pestphp/pest | grep -E '^(name|versions)'
+      - run: composer show --direct
 
       - run: vendor/bin/pest
 
@@ -103,12 +106,17 @@ jobs:
     # php-ci-static bundles one phpredis release, and the failure messages
     # this package matches come from phpredis, so each supported release gets
     # its own run. setup-php is the only installer that pins a PECL version.
-    name: phpredis ${{ matrix.phpredis }}
+    name: phpredis ${{ matrix.phpredis }} · PHP ${{ matrix.php }}
     runs-on: depot-ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        phpredis: ['6.0.2', '6.1.0', '6.2.0', '6.3.0']
+        include:
+          # phpredis 6.0 does not build against PHP 8.4.
+          - { phpredis: '6.0.2', php: '8.3' }
+          - { phpredis: '6.1.0', php: '8.4' }
+          - { phpredis: '6.2.0', php: '8.4' }
+          - { phpredis: '6.3.0', php: '8.4' }
     services:
       valkey:
         image: valkey/valkey:8.1
@@ -121,7 +129,7 @@ jobs:
 
       - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
-          php-version: '8.4'
+          php-version: ${{ matrix.php }}
           extensions: redis-${{ matrix.phpredis }}, sockets, pcntl
           coverage: none
 
