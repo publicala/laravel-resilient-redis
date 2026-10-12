@@ -33,7 +33,8 @@ jobs:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
           set -euo pipefail
-          # Walk CHANGELOG.md history oldest→newest. The introduction commit
+          # Walk main's own CHANGELOG.md history oldest→newest (first parent, so a
+          # merge commit counts as the change rather than its feature branch). The introduction commit
           # is the first one where the top `## vX.Y.Z` header equals VERSION
           # (i.e., the transition from "previous version at top" to "VERSION
           # at top"). This lets workflow_dispatch on main cut a release for a
@@ -51,7 +52,7 @@ jobs:
               release_sha=$sha
             fi
             prev=$v
-          done < <(git log --reverse --format=%H -- CHANGELOG.md)
+          done < <(git log --reverse --first-parent --format=%H -- CHANGELOG.md)
 
           if [[ -z "$release_sha" ]]; then
             echo "::error file=CHANGELOG.md::Could not find commit where v$VERSION was introduced at the top of CHANGELOG.md. Aborting."

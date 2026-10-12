@@ -52,16 +52,16 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
     private bool $watching = false;
 
     /**
-     * The database the last successful SELECT chose, which a rebuilt client must select too.
+     * The database phpredis reported after the last successful command, which a rebuilt client must select too.
      */
     private ?int $selectedDatabase = null;
 
     /**
-     * The WATCH, UNWATCH and SELECT calls queued in the open MULTI or pipeline, which take effect only if it runs.
+     * The WATCH and UNWATCH calls queued in the open MULTI or pipeline, which take effect only if it runs.
      *
-     * @var list<array{string, array<int, mixed>}>
+     * @var list<string>
      */
-    private array $queuedSessionChanges = [];
+    private array $queuedWatchChanges = [];
 
     /**
      * @param  Redis  $client
@@ -101,7 +101,7 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
                 continue;
             }
 
-            $this->trackSessionState(mb_strtolower($method), $parameters, $result, $mode);
+            $this->trackSessionState(mb_strtolower($method), $result, $mode);
 
             // Dispatched outside the catch, so a listener that throws cannot run the command again.
             $this->events?->dispatch(new CommandExecuted(
@@ -218,9 +218,19 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
     private function executeBatch(Redis $batch, callable $callback, bool $transaction): array|false
     {
         try {
-            $result = tap($batch, $callback)->exec();
+            $callback($batch);
+
+            // A rebuild inside the callback lost the batch with its socket, and phpredis would reconnect it only to fail EXEC.
+            if ($batch !== $this->client) {
+                return false;
+            }
+
+            $result = $batch->exec();
         } catch (Throwable $throwable) {
-            $this->settleBatch(ran: false, transaction: $transaction);
+            // A rebuild inside the callback already reset the session state, which now belongs to the new client.
+            if ($batch === $this->client) {
+                $this->settleBatch(ran: false, transaction: $transaction);
+            }
 
             // phpredis reconnects a failed client to send DISCARD, so a client whose socket is gone is left alone.
             if ($batch->isConnected()) {
@@ -235,63 +245,65 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
             throw $throwable;
         }
 
-        $this->settleBatch(ran: is_array($result), transaction: $transaction);
+        if ($batch === $this->client) {
+            $this->settleBatch(ran: is_array($result), transaction: $transaction);
+        }
 
         return $result;
     }
 
-    /**
-     * @param  array<int, mixed>  $parameters
-     */
-    private function trackSessionState(string $method, array $parameters, mixed $result, int $mode): void
+    private function trackSessionState(string $method, mixed $result, int $mode): void
     {
+        $this->rememberDatabase();
+
         if ($method === 'exec' || $method === 'discard') {
             $this->settleBatch(ran: $method === 'exec' && is_array($result), transaction: $mode === Redis::MULTI);
 
             return;
         }
 
-        if ($result === false || ! in_array($method, ['watch', 'unwatch', 'select'], true)) {
+        if ($result === false || ! in_array($method, ['watch', 'unwatch'], true)) {
             return;
         }
 
         if ($mode !== Redis::ATOMIC) {
-            $this->queuedSessionChanges[] = [$method, $parameters];
+            $this->queuedWatchChanges[] = $method;
 
             return;
         }
 
-        $this->applySessionChange($method, $parameters);
+        $this->watching = $method === 'watch';
     }
 
     /**
-     * Apply the session changes the batch queued if it ran, and drop them either way.
+     * Apply the WATCH changes the batch queued if it ran, and drop them either way.
      *
      * EXEC and DISCARD end a MULTI's WATCH whatever the outcome, while a pipeline leaves it open.
      */
     private function settleBatch(bool $ran, bool $transaction): void
     {
-        if ($ran) {
-            collect($this->queuedSessionChanges)->each(fn (array $change) => $this->applySessionChange(...$change));
+        if ($ran && $this->queuedWatchChanges !== []) {
+            $this->watching = last($this->queuedWatchChanges) === 'watch';
         }
 
-        $this->queuedSessionChanges = [];
+        $this->queuedWatchChanges = [];
 
         if ($transaction) {
             $this->watching = false;
         }
+
+        $this->rememberDatabase();
     }
 
     /**
-     * @param  array<int, mixed>  $parameters
+     * Keep the database phpredis tracks, which follows a SELECT only once the server accepted it, batched or not.
      */
-    private function applySessionChange(string $method, array $parameters): void
+    private function rememberDatabase(): void
     {
-        match ($method) {
-            'watch' => $this->watching = true,
-            'unwatch' => $this->watching = false,
-            default => $this->selectedDatabase = (int) $parameters[0],
-        };
+        // phpredis answers false instead of a number while the client has no socket.
+        if ($this->client->isConnected()) {
+            $this->selectedDatabase = $this->client->getDbNum();
+        }
     }
 
     /**
@@ -317,14 +329,16 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
         }
 
         $this->watching = false;
-        $this->queuedSessionChanges = [];
+        $this->queuedWatchChanges = [];
 
         try {
             $client = call_user_func($this->connector);
 
             $options->each(fn (mixed $value, int $option): bool => $client->getOption($option) === $value || $client->setOption($option, $value));
 
-            throw_if($this->selectedDatabase !== null && $client->select($this->selectedDatabase) !== true, $cause);
+            $database = $this->selectedDatabase;
+
+            throw_if($database !== null && $client->getDbNum() !== $database && $client->select($database) !== true, $cause);
         } catch (Throwable) {
             throw $cause;
         }

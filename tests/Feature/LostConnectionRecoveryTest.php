@@ -335,6 +335,56 @@ it('tracks a MULTI sent through the connection one command at a time', function 
     'dropped with DISCARD' => ['discard', ['SELECT 0', 'MULTI', 'SELECT 3', 'DISCARD', 'GET greeting', 'SELECT 0', 'GET greeting']],
 ]);
 
+it('selects again the database the server accepted when a transaction also queued one it refused', function (): void {
+    $server = FakeRedisServer::start(['serve:5', 'serve']);
+    $connection = recoveringConnection($server);
+    $callback = function () use ($connection): void {
+        $connection->select(3);
+        $connection->select(99);
+    };
+
+    expect($connection->transaction($callback))->toBe([true, false]);
+
+    $connection->get('greeting');
+
+    expect(array_slice($server->commands(), -3))->toBe(['SELECT 0', 'SELECT 3', 'GET greeting']);
+});
+
+it('drops a transaction whose client was rebuilt inside its callback, keeping the watch the caller then opened', function (): void {
+    $server = FakeRedisServer::start(['serve:2', 'serve:2', 'serve']);
+    $connection = recoveringConnection($server);
+    $callback = function () use ($connection): void {
+        try {
+            $connection->get('greeting');
+        } catch (RedisException) {
+            // The rebuilt client carries on, and the old transaction is gone with its socket.
+        }
+
+        $connection->watch('balance');
+    };
+
+    expect($connection->transaction($callback))->toBeFalse()
+        ->and($server->acceptedConnections())->toBe(2);
+
+    expect(fn () => $connection->get('balance'))->toThrowLostConnection();
+
+    expect($server->commands())->toBe(['SELECT 0', 'MULTI', 'GET greeting', 'SELECT 0', 'WATCH balance', 'GET balance', 'SELECT 0']);
+});
+
+it('counts a WATCH a pipeline sent through the connection once the pipeline runs', function (): void {
+    $server = FakeRedisServer::start(['serve:2', 'serve']);
+    $connection = recoveringConnection($server);
+    $callback = function () use ($connection): void {
+        $connection->watch('balance');
+    };
+
+    $connection->pipeline($callback);
+
+    expect(fn () => $connection->get('balance'))->toThrowLostConnection();
+
+    expect($server->commands())->toBe(['SELECT 0', 'WATCH balance', 'GET balance', 'SELECT 0']);
+});
+
 it('clears the watch after UNWATCH, so a later read is replayed again', function (): void {
     $server = FakeRedisServer::start(['serve:3', 'serve']);
     $connection = recoveringConnection($server);
