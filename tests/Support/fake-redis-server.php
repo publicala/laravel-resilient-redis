@@ -13,6 +13,7 @@ declare(strict_types=1);
  *   serve                 answer every command
  *   serve:N               answer N commands, then close the socket (FIN)
  *   serve-then-reset:N    answer N commands, then reset the socket (RST) when the next one arrives
+ *   serve-rejecting:N:CMD answer N commands like serve:N, refusing CMD with a NOPERM error
  *   serve-then-drop:N     answer N commands, then reset the idle socket before the next one is sent
  *   reset                 reset (RST) right after accepting
  *   close-on-first-read   wait for the first bytes (a TLS ClientHello or a command), then close (FIN)
@@ -154,7 +155,7 @@ while (true) {
 
         while (($command = parseCommand($client['buffer'])) !== null) {
             [$arguments, $client['buffer']] = $command;
-            $name = mb_strtoupper($arguments[0]);
+            $name = strtoupper($arguments[0]);
             $record('command '.implode(' ', array_map(fn (string $argument): string|false => str_contains($argument, ' ') ? json_encode($argument) : $argument, $arguments)));
 
             [$kind, $limit, $message] = array_pad(explode(':', $client['step'], 3), 3, null);
@@ -164,7 +165,7 @@ while (true) {
             }
 
             if ($limit !== null && $kind !== 'serve-then-drop' && $client['answered'] >= (int) $limit) {
-                if ($kind === 'serve') {
+                if ($kind === 'serve' || $kind === 'serve-rejecting') {
                     fclose($stream);
                     unset($clients[(int) $stream]);
 
@@ -184,7 +185,9 @@ while (true) {
                 continue;
             }
 
-            fwrite($stream, respond($client, $name, array_slice($arguments, 1), $store));
+            fwrite($stream, $kind === 'serve-rejecting' && $name === $message
+                ? "-NOPERM this user has no permissions to run the '".strtolower($name)."' command\r\n"
+                : respond($client, $name, array_slice($arguments, 1), $store));
             $client['answered']++;
 
             if ($kind === 'serve-then-drop' && $client['answered'] >= (int) $limit) {
@@ -214,7 +217,7 @@ function parseCommand(string $buffer): ?array
     }
 
     $offset = 0;
-    $count = (int) mb_substr($buffer, 1, ($end = mb_strpos($buffer, "\r\n")) - 1);
+    $count = (int) substr($buffer, 1, ($end = strpos($buffer, "\r\n")) - 1);
 
     if ($end === false) {
         return null;
@@ -224,23 +227,23 @@ function parseCommand(string $buffer): ?array
     $arguments = [];
 
     for ($i = 0; $i < $count; $i++) {
-        $end = mb_strpos($buffer, "\r\n", $offset);
+        $end = strpos($buffer, "\r\n", $offset);
 
         if ($end === false) {
             return null;
         }
 
-        $length = (int) mb_substr($buffer, $offset + 1, $end - $offset - 1);
+        $length = (int) substr($buffer, $offset + 1, $end - $offset - 1);
 
-        if (mb_strlen($buffer) < $end + 2 + $length + 2) {
+        if (strlen($buffer) < $end + 2 + $length + 2) {
             return null;
         }
 
-        $arguments[] = mb_substr($buffer, $end + 2, $length);
+        $arguments[] = substr($buffer, $end + 2, $length);
         $offset = $end + 2 + $length + 2;
     }
 
-    return [$arguments, mb_substr($buffer, $offset)];
+    return [$arguments, substr($buffer, $offset)];
 }
 
 /**
@@ -295,7 +298,7 @@ function reply(string $name, array $arguments, array &$store): string
         'PING' => "+PONG\r\n",
         'SELECT' => (int) $arguments[0] > 15 ? "-ERR DB index is out of range\r\n" : "+OK\r\n",
         'GET' => isset($store[$arguments[0]])
-            ? '$'.mb_strlen($store[$arguments[0]])."\r\n{$store[$arguments[0]]}\r\n"
+            ? '$'.strlen($store[$arguments[0]])."\r\n{$store[$arguments[0]]}\r\n"
             : "\$-1\r\n",
         'SET' => (function () use ($arguments, &$store): string {
             $store[$arguments[0]] = $arguments[1];

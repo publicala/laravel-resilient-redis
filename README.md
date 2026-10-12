@@ -27,7 +27,7 @@ Every connect Laravel's phpredis connector makes goes through the package: the f
 
 In one 30-day production sample, all 18 requests whose connect failed on a pooled socket the server had dropped succeeded on the second attempt, 110–170 ms later.
 
-The forms above are matched by their message, so a lasting misconfiguration that produces one (a wrong port answers `Connection refused`) fails after the retries, at most about 0.6 seconds later than without the package.
+The forms above are matched by their message, so a lasting misconfiguration that produces one (a wrong port answers `Connection refused`) fails only after the retries: the time of two more attempts, plus at most 0.6 seconds of waiting between them.
 
 The package **never retries** these failures:
 

@@ -233,7 +233,7 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
             }
 
             // phpredis reconnects a failed client to send DISCARD, so a client whose socket is gone is left alone.
-            if ($batch->isConnected()) {
+            if ($batch->isConnected() && $batch->getMode() !== Redis::ATOMIC) {
                 rescue(fn (): Redis|bool => $batch->discard(), null, false);
             }
 
@@ -278,12 +278,16 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
     /**
      * Apply the WATCH changes the batch queued if it ran, and drop them either way.
      *
-     * EXEC and DISCARD end a MULTI's WATCH whatever the outcome, while a pipeline leaves it open.
+     * A pipeline that failed may have run its WATCH before the failing
+     * command, so its WATCH counts as open until known otherwise. EXEC
+     * and DISCARD end a MULTI's WATCH whatever the outcome.
      */
     private function settleBatch(bool $ran, bool $transaction): void
     {
         if ($ran && $this->queuedWatchChanges !== []) {
             $this->watching = last($this->queuedWatchChanges) === 'watch';
+        } elseif (in_array('watch', $this->queuedWatchChanges, true)) {
+            $this->watching = true;
         }
 
         $this->queuedWatchChanges = [];

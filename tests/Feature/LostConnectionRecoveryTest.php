@@ -385,6 +385,20 @@ it('counts a WATCH a pipeline sent through the connection once the pipeline runs
     expect($server->commands())->toBe(['SELECT 0', 'WATCH balance', 'GET balance', 'SELECT 0']);
 });
 
+it('treats a WATCH sent by a pipeline that failed as open', function (): void {
+    $server = FakeRedisServer::start(['serve-rejecting:3:SET', 'serve']);
+    $connection = recoveringConnection($server);
+    $callback = function (Redis $pipeline) use ($connection): void {
+        $connection->watch('balance');
+        $pipeline->set('balance', '1');
+    };
+
+    expect(fn (): Redis|array|false => $connection->pipeline($callback))->toThrow(RedisException::class, 'NOPERM');
+    expect(fn () => $connection->get('balance'))->toThrowLostConnection();
+
+    expect($server->commands())->toBe(['SELECT 0', 'WATCH balance', 'SET balance 1', 'GET balance', 'SELECT 0']);
+});
+
 it('clears the watch after UNWATCH, so a later read is replayed again', function (): void {
     $server = FakeRedisServer::start(['serve:3', 'serve']);
     $connection = recoveringConnection($server);
