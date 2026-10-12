@@ -128,6 +128,8 @@ A changed switch takes effect once the config cache is rebuilt and long-running 
 | Laravel | 11, 12, 13 |
 | phpredis | 6.0 to 6.3 |
 
+phpredis 5 is not supported: after a read error it still reports the client as connected, and `close()` reconnects it. Ubuntu 24.04 packages phpredis 5.3.7, so on its stock PHP install 6.x with `pecl install redis` or from the [ondrej/php](https://launchpad.net/~ondrej/+archive/ubuntu/php) PPA.
+
 ## Testing
 
 The suite drives real phpredis clients against a scripted RESP server it starts itself, and against a real Valkey or Redis on port 6390:
