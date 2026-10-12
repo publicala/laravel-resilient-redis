@@ -227,12 +227,16 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
         } catch (Throwable $throwable) {
             // A rebuild inside the callback already reset the session state, which now belongs to the new client.
             if ($batch === $this->client) {
-                $this->settleBatch($transaction);
+                $this->settleBatch(closesWatch: false);
             }
 
             // phpredis reconnects a failed client to send DISCARD, so a client whose socket is gone is left alone.
             if ($batch->isConnected() && $batch->getMode() !== Redis::ATOMIC) {
-                rescue(fn (): Redis|bool => $batch->discard(), null, false);
+                $discarded = rescue(fn (): Redis|bool => $batch->discard(), false, false) === true;
+
+                if ($discarded && $transaction && $batch === $this->client) {
+                    $this->watching = false;
+                }
             }
 
             // The callback may already have rebuilt the client through command().
@@ -244,7 +248,7 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
         }
 
         if ($batch === $this->client) {
-            $this->settleBatch($transaction);
+            $this->settleBatch(closesWatch: $transaction && is_array($result));
         }
 
         return $result;
@@ -255,7 +259,9 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
         $this->rememberDatabase();
 
         if ($method === 'exec' || $method === 'discard') {
-            $this->settleBatch(transaction: $mode === Redis::MULTI);
+            $confirmed = $method === 'exec' ? is_array($result) : $result === true;
+
+            $this->settleBatch(closesWatch: $mode === Redis::MULTI && $confirmed);
 
             return;
         }
@@ -278,17 +284,13 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
      * Settle the WATCH state once a batch ends.
      *
      * A WATCH the batch queued counts as open whatever the outcome, since
-     * a failed pipeline may have sent it before the failing command. EXEC
-     * and DISCARD end a MULTI's WATCH, while a pipeline leaves it open.
+     * a failed pipeline may have sent it before the failing command. Only
+     * a MULTI the server confirmed it ran or discarded closes the watch.
      */
-    private function settleBatch(bool $transaction): void
+    private function settleBatch(bool $closesWatch): void
     {
-        $this->watching = $this->watching || $this->watchQueued;
+        $this->watching = ($this->watching || $this->watchQueued) && ! $closesWatch;
         $this->watchQueued = false;
-
-        if ($transaction) {
-            $this->watching = false;
-        }
 
         $this->rememberDatabase();
     }
