@@ -27,7 +27,7 @@ function connectorReportingTo(array &$reported, ?Closure $clock = null, bool $re
 }
 
 it('retries a connect whose pooled socket the server dropped, and reports the recovery', function (bool $persistent): void {
-    $server = FakeRedisServer::start(['close', 'serve']);
+    $server = FakeRedisServer::start(['close-on-first-read', 'serve']);
     $reported = [];
 
     $connection = connectorReportingTo($reported)->connect($server->config(['persistent' => $persistent, 'persistent_id' => Str::random()]), []);
@@ -62,7 +62,7 @@ it('retries a TLS handshake that the server resets', function (): void {
 });
 
 it('gives up after three attempts with a jittered wait between them, and reports nothing', function (): void {
-    $server = FakeRedisServer::start(['close']);
+    $server = FakeRedisServer::start(['close-on-first-read']);
     $reported = [];
     $waits = [];
     Sleep::whenFakingSleep(function (CarbonInterval $duration) use (&$waits): void {
@@ -80,7 +80,7 @@ it('gives up after three attempts with a jittered wait between them, and reports
 });
 
 it('makes the number of attempts the connection allows', function (int $retries, int $attempts): void {
-    $server = FakeRedisServer::start(['close']);
+    $server = FakeRedisServer::start(['close-on-first-read']);
     $reported = [];
 
     expect(fn (): PhpRedisConnection => connectorReportingTo($reported)->connect($server->config(['connect_retries' => $retries]), []))
@@ -93,7 +93,7 @@ it('makes the number of attempts the connection allows', function (int $retries,
 ]);
 
 it('takes the retries from redis.options over the connection itself', function (): void {
-    $server = FakeRedisServer::start(['close']);
+    $server = FakeRedisServer::start(['close-on-first-read']);
     $reported = [];
 
     expect(fn (): PhpRedisConnection => connectorReportingTo($reported)->connect($server->config(['connect_retries' => 4]), ['connect_retries' => 0]))
@@ -155,7 +155,7 @@ it('does not retry a failure from outside phpredis', function (): void {
 })->skip(fn (): bool => ! (new ReflectionClass(PhpRedisConnector::class))->hasMethod('parseBackoffAlgorithm'), 'Laravel 11 passes the algorithm to phpredis unchecked.');
 
 it('starts no attempt once the retry window has closed during the wait', function (): void {
-    $server = FakeRedisServer::start(['close']);
+    $server = FakeRedisServer::start(['close-on-first-read']);
     $reported = [];
     $now = 0.0;
     Sleep::whenFakingSleep(function () use (&$now): void {
@@ -173,7 +173,7 @@ it('starts no attempt once the retry window has closed during the wait', functio
 });
 
 it('does not wait for an attempt that would start after the window closes', function (): void {
-    $server = FakeRedisServer::start(['close']);
+    $server = FakeRedisServer::start(['close-on-first-read']);
     $reported = [];
     $now = 0.0;
     Sleep::whenFakingSleep(function () use (&$now): void {

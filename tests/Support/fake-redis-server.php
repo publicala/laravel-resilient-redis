@@ -14,9 +14,9 @@ declare(strict_types=1);
  *   serve:N               answer N commands, then close the socket (FIN)
  *   serve-then-reset:N    answer N commands, then reset the socket (RST) when the next one arrives
  *   serve-then-drop:N     answer N commands, then reset the idle socket before the next one is sent
- *   close                 close (FIN) right after accepting
  *   reset                 reset (RST) right after accepting
- *   reset-on-first-read   wait for the first bytes (a TLS ClientHello or a command), then reset
+ *   close-on-first-read   wait for the first bytes (a TLS ClientHello or a command), then close (FIN)
+ *   reset-on-first-read   wait for the first bytes, then reset
  *   reply-garbage         answer the first bytes with a plain-text line (breaks a TLS handshake)
  *   stall                 accept and never answer
  *   error:MESSAGE         answer every command with "-MESSAGE"
@@ -85,12 +85,6 @@ while (true) {
             $accepted++;
             $record("accept {$accepted} {$step}");
 
-            if ($step === 'close') {
-                fclose($connection);
-
-                continue;
-            }
-
             if ($step === 'reset') {
                 $resetSocket($connection);
 
@@ -129,6 +123,15 @@ while (true) {
         }
 
         if ($client['step'] === 'stall') {
+            continue;
+        }
+
+        // Closing only after the client wrote keeps phpredis from noticing the
+        // close before it sends, where it reconnects on its own (max_retries).
+        if ($client['step'] === 'close-on-first-read') {
+            fclose($stream);
+            unset($clients[(int) $stream]);
+
             continue;
         }
 
