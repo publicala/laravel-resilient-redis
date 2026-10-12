@@ -1,0 +1,149 @@
+name: CI
+
+# Orchestrator for the whole automated pipeline: the test matrix, the
+# changelog-driven release checks, and the release cut itself.
+#
+# Shape: ci.yml owns the triggers, the event/path routing, the `needs` DAG and
+# the `ci-success` gate. Each job body lives in its own `workflow_call` file so
+# the orchestrator stays readable. `needs` cannot span workflow files, which is
+# why the DAG and the gate live here: the aggregate `ci-success` gate depends on
+# every check, and `release` depends on that gate, so a red CI run can never
+# publish a release.
+#
+# Routing: the `test` matrix runs on every push to main and every PR, so the
+# workflow-level `on:` carries no path filters. The release-family callers
+# (validate / guard-changelog-bump / release) scope to a subset of paths via the
+# inline `changes` job plus the caller-level `if` conditions below.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    # Every push to main and every PR. Never on workflow_dispatch, which the CI
+    # workflow does not expose.
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    uses: ./.github/workflows/tests.yml
+    secrets: inherit
+
+  changes:
+    # Path router for the release family. The release-family callers scope to a
+    # subset of paths; this job computes the path-filter outputs they read.
+    # Skipped on workflow_dispatch, where there is no diff base and the
+    # release-family callers gate on the event instead.
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: depot-ubuntu-24.04
+    outputs:
+      # Push-scope paths for the release family: a changelog edit or a workflow
+      # edit.
+      changelog_or_workflow: ${{ steps.filter.outputs.changelog_or_workflow }}
+      # Extra paths the pull-request scope adds on top: the package surface that
+      # must be matched by a changelog bump.
+      package_surface: ${{ steps.filter.outputs.package_surface }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+        id: filter
+        with:
+          filters: |
+            changelog_or_workflow:
+              - 'CHANGELOG.md'
+              - '.github/workflows/**'
+            package_surface:
+              - 'src/**'
+              - 'config/**'
+              - 'composer.json'
+
+  validate:
+    # Routing: push to main touching CHANGELOG/workflow, any PR touching
+    # CHANGELOG/src/composer/workflow, or a manual dispatch.
+    #
+    # `changes` skips on workflow_dispatch, and without a status function a
+    # skipped dependency skips this job too, so dispatch runs would silently lose
+    # changelog validation. The gate allows the skip, so the leading
+    # `!cancelled()` is the only thing that makes dispatch validation actually
+    # run.
+    needs: changes
+    if: >-
+      !cancelled()
+      && (
+        github.event_name == 'workflow_dispatch'
+        || (github.event_name == 'push' && needs.changes.outputs.changelog_or_workflow == 'true')
+        || (github.event_name == 'pull_request' && (needs.changes.outputs.changelog_or_workflow == 'true' || needs.changes.outputs.package_surface == 'true'))
+      )
+    uses: ./.github/workflows/validate-changelog.yml
+    secrets: inherit
+
+  guard-changelog-bump:
+    # Routing: PRs only, scoped to CHANGELOG/src/composer/workflow paths.
+    needs: changes
+    if: >-
+      github.event_name == 'pull_request'
+      && (needs.changes.outputs.changelog_or_workflow == 'true' || needs.changes.outputs.package_surface == 'true')
+    uses: ./.github/workflows/guard-changelog-bump.yml
+    secrets: inherit
+
+  # Aggregate gate: the single status check branch rulesets require.
+  # It needs every automated CI job and reports one pass or fail, so the
+  # ruleset never changes when a CI job is renamed or added. Runs on job
+  # failure and skip but not when the run is cancelled, so cancelled runs
+  # report as cancelled instead of failed.
+  #
+  # `changes` is in this gate's needs even though it is only a trigger router:
+  # if it errors, its dependents (validate, guard-changelog-bump) skip, and a
+  # gate that ignored the router would report green over a red job, letting a
+  # PR merge with failing CI. allowed-skips covers its legitimate event-scoped
+  # skip on workflow_dispatch.
+  ci-success:
+    if: ${{ !cancelled() }}
+    needs: [test, changes, validate, guard-changelog-bump]
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: re-actors/alls-green@05ac9388f0aebcb5727afa17fcccfecd6f8ec5fe # v1.2.2
+        with:
+          # These jobs are path/event scoped, so they legitimately skip on runs
+          # that do not touch their paths (or on workflow_dispatch, where the
+          # test matrix and the changes router do not run). A skip is treated
+          # as success. A real failure still fails the gate.
+          allowed-skips: test, changes, validate, guard-changelog-bump
+          jobs: ${{ toJSON(needs) }}
+
+  release:
+    # Wired to need the aggregate gate so a red CI run can never publish a
+    # release. `ci-success` reports success only when every CI job it
+    # aggregates passed (or legitimately skipped), and it transitively covers
+    # `validate`, so requiring `ci-success == success` also guarantees the
+    # changelog header validated. `changes` is needed only for its output.
+    needs: [changes, ci-success]
+    # Hard-gate to main only. Without the ref check, a maintainer dispatching
+    # the workflow from a feature branch would publish vX.Y.Z from unmerged
+    # code. On push, the release push-scope (cut only when CHANGELOG/workflow
+    # changed) is reproduced through the `changes` job; dispatch runs regardless
+    # of paths.
+    #
+    # `!cancelled()` is required so this job is still evaluated when `changes`
+    # is skipped (it only runs on push/pull_request). Without a status function
+    # in the `if`, a skipped dependency would silently skip the release on
+    # workflow_dispatch. The explicit `needs.ci-success.result == 'success'`
+    # keeps the green-CI gate intact under that `!cancelled()` relaxation.
+    if: >-
+      !cancelled()
+      && needs.ci-success.result == 'success'
+      && github.ref == 'refs/heads/main'
+      && (github.event_name == 'workflow_dispatch'
+          || (github.event_name == 'push' && needs.changes.outputs.changelog_or_workflow == 'true'))
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml
+    secrets: inherit

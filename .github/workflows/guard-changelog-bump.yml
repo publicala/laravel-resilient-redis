@@ -1,0 +1,72 @@
+name: Guard changelog bump
+
+# Reusable body for the changelog-bump guard. The orchestrator (ci.yml) owns the
+# event routing and the needs DAG. This file carries only the job body so the
+# orchestrator stays readable.
+
+on:
+  workflow_call:
+
+jobs:
+  guard-changelog-bump:
+    name: Guard CHANGELOG bump when source changes
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Need both PR head and base for the diff and the base-CHANGELOG read.
+          fetch-depth: 0
+
+      - name: Check
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # Diff and read CHANGELOG.md at the PR head, never at the checked-out
+          # merge ref: the merge ref folds in everything main gained after the
+          # PR branched, which both fails innocent PRs (main's src/ change
+          # attributed to the PR) and lets main's merged-in version bump mask a
+          # missing one in the PR itself.
+          changed=$(git diff --name-only "$BASE_SHA...$HEAD_SHA" -- src/ config/ composer.json)
+          if [[ -z "$changed" ]]; then
+            echo "No src/, config/ or composer.json changes in this PR: bump guard not applicable."
+            exit 0
+          fi
+          echo "PR modifies the package surface:"
+          printf '  - %s\n' $changed
+
+          # Read each blob into a variable before matching, rather than piping
+          # `git show` straight into `grep -m1`: grep closes the pipe after the
+          # first header, and on a CHANGELOG.md larger than the pipe buffer
+          # `git show` then dies with SIGPIPE, which `pipefail` turns into a
+          # false-red guard failure. The substitution still aborts on a genuine
+          # `git show` failure.
+          head_changelog=$(git show "$HEAD_SHA:CHANGELOG.md")
+          head_version=$(grep -m1 -E '^## v[0-9]+\.[0-9]+\.[0-9]+$' <<< "$head_changelog" | sed 's/^## v//')
+          # A base that predates CHANGELOG.md (the repository's first release) counts as v0.0.0.
+          if git cat-file -e "$BASE_SHA:CHANGELOG.md" 2>/dev/null; then
+            base_changelog=$(git show "$BASE_SHA:CHANGELOG.md")
+            base_version=$(grep -m1 -E '^## v[0-9]+\.[0-9]+\.[0-9]+$' <<< "$base_changelog" | sed 's/^## v//')
+          else
+            base_version=0.0.0
+          fi
+
+          echo "Top version on base ($BASE_SHA): v$base_version"
+          echo "Top version on PR head:          v$head_version"
+
+          if [[ "$head_version" == "$base_version" ]]; then
+            echo "::error file=CHANGELOG.md::Package surface changed but the top CHANGELOG header is still v$head_version. Add a new '## vX.Y.Z' block at the top of CHANGELOG.md (see the Versioning section at the bottom for the semver rules) so the release workflow can publish your change."
+            exit 1
+          fi
+
+          # Strict monotonic check: head must be strictly greater than base in
+          # semver order. Catches downgrades (`v0.2.1` -> `v0.2.0`) that would
+          # otherwise slip through `head != base`. `sort -V` does the right
+          # thing on plain `X.Y.Z`.
+          newest=$(printf '%s\n%s\n' "$base_version" "$head_version" | sort -V | tail -1)
+          if [[ "$newest" != "$head_version" ]]; then
+            echo "::error file=CHANGELOG.md::Top CHANGELOG version went backwards: base is v$base_version, PR sets v$head_version. The release flow only moves forward — bump the version above v$base_version."
+            exit 1
+          fi
+          echo "OK: bumped v$base_version -> v$head_version"

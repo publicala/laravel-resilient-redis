@@ -1,0 +1,36 @@
+version: 2
+
+updates:
+  # GitHub Actions used in workflows: actions/checkout, publicala/php-ci-static.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+      include: scope
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  # Composer dev dependencies (Pint, Rector, PHPStan, Pest, Larastan, Testbench).
+  # Runtime requirements (illuminate/*) intentionally stay manual: the package
+  # supports Laravel ^11|^12|^13 and we want the human call when a major lands.
+  - package-ecosystem: composer
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+      include: scope
+    ignore:
+      - dependency-name: illuminate/*
+      - dependency-name: laravel/framework
+    groups:
+      dev-dependencies:
+        dependency-type: development
+        patterns: ["*"]

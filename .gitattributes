@@ -1,0 +1,17 @@
+# Keep the distributed package lean.
+/.github            export-ignore
+/tests              export-ignore
+/.gitattributes     export-ignore
+/.gitignore         export-ignore
+/.editorconfig      export-ignore
+/phpunit.xml.dist   export-ignore
+/phpstan.neon       export-ignore
+/pint.json          export-ignore
+/CHANGELOG.md       export-ignore
+/CLAUDE.md          export-ignore
+/lefthook.yml       export-ignore
+/rector.php         export-ignore
+/prettier.config.mjs export-ignore
+/.prettierignore    export-ignore
+
+* text=auto eol=lf
