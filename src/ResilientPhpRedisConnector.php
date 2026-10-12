@@ -76,10 +76,16 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
         $config['timeout'] ??= self::DEFAULT_TIMEOUT;
         $policy = ConnectRetryPolicy::fromConfig($config);
         $firstAttemptAt = $this->now();
+        $lastFailure = null;
         $lastReason = null;
 
         for ($attempt = 1; ; $attempt++) {
             $attemptStartedAt = $this->now();
+
+            // A sleep can overrun its delay, so every retry checks the window at the moment it starts.
+            if ($lastFailure instanceof Throwable) {
+                throw_unless($policy->allowsAttemptAt($attemptStartedAt - $firstAttemptAt), $lastFailure);
+            }
 
             try {
                 $client = parent::createClient($config);
@@ -91,9 +97,7 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
 
                 Sleep::for($delay)->milliseconds();
 
-                // A sleep can overrun its delay, so the window is checked again before the next attempt.
-                throw_unless($policy->allowsAttemptAt($this->now() - $firstAttemptAt), $e);
-
+                $lastFailure = $e;
                 $lastReason = $reason;
 
                 continue;

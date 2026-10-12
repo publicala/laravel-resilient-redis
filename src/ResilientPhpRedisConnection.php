@@ -57,6 +57,13 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
     private ?int $selectedDatabase = null;
 
     /**
+     * The WATCH, UNWATCH and SELECT calls queued in the open MULTI or pipeline, which take effect only if it runs.
+     *
+     * @var list<array{string, array<int, mixed>}>
+     */
+    private array $queuedSessionChanges = [];
+
+    /**
      * @param  Redis  $client
      * @param  array<string, mixed>  $config
      * @param  (Closure(object): void)|null  $report
@@ -78,7 +85,8 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
 
         while (true) {
             // A command sent inside a MULTI or a pipeline only queues, and a rebuilt client would run it outside the batch.
-            $batched = $this->client->getMode() !== Redis::ATOMIC;
+            $mode = $this->client->getMode();
+            $batched = $mode !== Redis::ATOMIC;
             $startedAt = microtime(true);
 
             try {
@@ -93,7 +101,7 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
                 continue;
             }
 
-            $this->trackSessionState($method, $parameters, $result);
+            $this->trackSessionState(mb_strtolower($method), $parameters, $result, $mode);
 
             // Dispatched outside the catch, so a listener that throws cannot run the command again.
             $this->events?->dispatch(new CommandExecuted(
@@ -120,7 +128,7 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
     {
         $pipeline = $this->openBatch(fn (): Redis|false => $this->client()->pipeline());
 
-        return $callback === null || $pipeline === false ? $pipeline : $this->executeBatch($pipeline, $callback);
+        return $callback === null || $pipeline === false ? $pipeline : $this->executeBatch($pipeline, $callback, transaction: false);
     }
 
     /**
@@ -130,7 +138,7 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
     {
         $transaction = $this->openBatch(fn (): Redis|false => $this->client()->multi());
 
-        return $callback === null || $transaction === false ? $transaction : $this->executeBatch($transaction, $callback);
+        return $callback === null || $transaction === false ? $transaction : $this->executeBatch($transaction, $callback, transaction: true);
     }
 
     /**
@@ -207,12 +215,17 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
      *
      * @throws Throwable
      */
-    private function executeBatch(Redis $batch, callable $callback): array|false
+    private function executeBatch(Redis $batch, callable $callback, bool $transaction): array|false
     {
         try {
-            return tap($batch, $callback)->exec();
+            $result = tap($batch, $callback)->exec();
         } catch (Throwable $throwable) {
-            rescue(fn (): Redis|bool => $batch->discard(), null, false);
+            $this->settleBatch(ran: false, transaction: $transaction);
+
+            // phpredis reconnects a failed client to send DISCARD, so a client whose socket is gone is left alone.
+            if ($batch->isConnected()) {
+                rescue(fn (): Redis|bool => $batch->discard(), null, false);
+            }
 
             // The callback may already have rebuilt the client through command().
             if ($batch === $this->client && Failure::lostConnectionReason($throwable) !== null) {
@@ -220,7 +233,51 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
             }
 
             throw $throwable;
-        } finally {
+        }
+
+        $this->settleBatch(ran: is_array($result), transaction: $transaction);
+
+        return $result;
+    }
+
+    /**
+     * @param  array<int, mixed>  $parameters
+     */
+    private function trackSessionState(string $method, array $parameters, mixed $result, int $mode): void
+    {
+        if ($method === 'exec' || $method === 'discard') {
+            $this->settleBatch(ran: $method === 'exec' && is_array($result), transaction: $mode === Redis::MULTI);
+
+            return;
+        }
+
+        if ($result === false || ! in_array($method, ['watch', 'unwatch', 'select'], true)) {
+            return;
+        }
+
+        if ($mode !== Redis::ATOMIC) {
+            $this->queuedSessionChanges[] = [$method, $parameters];
+
+            return;
+        }
+
+        $this->applySessionChange($method, $parameters);
+    }
+
+    /**
+     * Apply the session changes the batch queued if it ran, and drop them either way.
+     *
+     * EXEC and DISCARD end a MULTI's WATCH whatever the outcome, while a pipeline leaves it open.
+     */
+    private function settleBatch(bool $ran, bool $transaction): void
+    {
+        if ($ran) {
+            collect($this->queuedSessionChanges)->each(fn (array $change) => $this->applySessionChange(...$change));
+        }
+
+        $this->queuedSessionChanges = [];
+
+        if ($transaction) {
             $this->watching = false;
         }
     }
@@ -228,17 +285,12 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
     /**
      * @param  array<int, mixed>  $parameters
      */
-    private function trackSessionState(string $method, array $parameters, mixed $result): void
+    private function applySessionChange(string $method, array $parameters): void
     {
-        if ($result === false) {
-            return;
-        }
-
-        match (mb_strtolower($method)) {
+        match ($method) {
             'watch' => $this->watching = true,
-            'unwatch', 'exec', 'discard' => $this->watching = false,
-            'select' => $this->selectedDatabase = (int) $parameters[0],
-            default => null,
+            'unwatch' => $this->watching = false,
+            default => $this->selectedDatabase = (int) $parameters[0],
         };
     }
 
@@ -265,6 +317,7 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
         }
 
         $this->watching = false;
+        $this->queuedSessionChanges = [];
 
         try {
             $client = call_user_func($this->connector);

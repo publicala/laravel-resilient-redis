@@ -121,6 +121,20 @@ it('reports a listener that fails instead of failing the Redis call that recover
     expect($reported)->toBe(['The metrics backend is down.']);
 });
 
+it('drops the report when reporting the failing listener fails too', function (): void {
+    $listened = false;
+    resolve(ExceptionHandler::class)->reportable(fn (Throwable $e) => throw new RuntimeException('The log sink is down.'));
+    resolve(Dispatcher::class)->listen(ConnectRecovered::class, function () use (&$listened): never {
+        $listened = true;
+
+        throw new RuntimeException('The metrics backend is down.');
+    });
+
+    resolve(RecoveryEvents::class)->dispatch(new ConnectRecovered('127.0.0.1', 6379, 0, false, 2, 140, 'read_error'));
+
+    expect($listened)->toBeTrue();
+});
+
 it('does not dispatch again from inside a listener', function (): void {
     $dispatched = 0;
     resolve(Dispatcher::class)->listen(CommandRecovered::class, function (CommandRecovered $event) use (&$dispatched): void {

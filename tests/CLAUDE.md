@@ -15,6 +15,7 @@ Pest `it()` only. Every file declares `declare(strict_types=1)`.
 - phpredis pools persistent sockets by host and port, and fake servers reuse random ports. Give every persistent connection its own `persistent_id`.
 - phpredis reconnects an idle socket it finds closed (`max_retries`, 10 by default), and `close()` on a failed client reconnects it first. Count accepted connections, not assumptions.
 - `throw_unless()` and `throw_if()` evaluate their message arguments eagerly.
+- `->not->toThrow(Throwable::class)` passes even when the callback throws: Pest reads an interface name as message text. To assert that nothing escapes, call the code directly and assert its effect.
 
 ## Running
 

@@ -30,9 +30,8 @@ concurrency:
 
 jobs:
   test:
-    # Every push to main and every PR. Never on workflow_dispatch, which the CI
-    # workflow does not expose.
-    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    # Every event, workflow_dispatch included: a manual run can cut a release,
+    # and the release must never skip the suite.
     uses: ./.github/workflows/tests.yml
     secrets: inherit
 
@@ -114,9 +113,10 @@ jobs:
         with:
           # These jobs are path/event scoped, so they legitimately skip on runs
           # that do not touch their paths (or on workflow_dispatch, where the
-          # test matrix and the changes router do not run). A skip is treated
-          # as success. A real failure still fails the gate.
-          allowed-skips: test, changes, validate, guard-changelog-bump
+          # changes router does not run). A skip is treated as success. A real
+          # failure still fails the gate. The test matrix runs on every event,
+          # so it is never an allowed skip.
+          allowed-skips: changes, validate, guard-changelog-bump
           jobs: ${{ toJSON(needs) }}
 
   release:

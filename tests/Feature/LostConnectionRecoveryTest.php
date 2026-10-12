@@ -189,7 +189,8 @@ it('does not replay a read that a transaction queued through the connection', fu
     }))->toThrowLostConnection();
 
     expect($server->commands())->toBe(['SELECT 0', 'MULTI', 'GET greeting', 'SELECT 0'])
-        ->and($connection->ping())->toBeTrue();
+        ->and($connection->ping())->toBeTrue()
+        ->and($server->acceptedConnections())->toBe(2);
 });
 
 it('returns the pipeline and the transaction themselves when given no callback', function (): void {
@@ -262,6 +263,77 @@ it('rethrows the read failure when the rebuilt client cannot select the database
 
     expect(fn () => $connection->get('greeting'))->toThrowLostConnection();
 });
+
+it('forgets a SELECT queued in a transaction that never ran', function (): void {
+    $server = FakeRedisServer::start(['serve:4', 'serve']);
+    $connection = recoveringConnection($server);
+    $callback = function () use ($connection): void {
+        $connection->select(3);
+
+        throw new RuntimeException('The order is no longer valid.');
+    };
+
+    expect(fn (): Redis|array|false => $connection->transaction($callback))->toThrow(RuntimeException::class, 'The order is no longer valid.');
+
+    $connection->get('greeting');
+
+    expect($server->commands())->toBe(['SELECT 0', 'MULTI', 'SELECT 3', 'DISCARD', 'GET greeting', 'SELECT 0', 'GET greeting']);
+});
+
+it('selects again the database a transaction switched to once it ran', function (): void {
+    $server = FakeRedisServer::start(['serve:4', 'serve']);
+    $connection = recoveringConnection($server);
+    $callback = function () use ($connection): void {
+        $connection->select(3);
+    };
+
+    $connection->transaction($callback);
+    $connection->get('greeting');
+
+    expect($server->commands())->toBe(['SELECT 0', 'MULTI', 'SELECT 3', 'EXEC', 'GET greeting', 'SELECT 0', 'SELECT 3', 'GET greeting']);
+});
+
+it('keeps the watch across a pipeline, so a transaction whose MULTI loses the connection does not run unwatched', function (): void {
+    $server = FakeRedisServer::start(['serve:3', 'serve']);
+    $connection = recoveringConnection($server);
+    $connection->watch('balance');
+    $connection->pipeline(fn (Redis $pipeline): Redis|false => $pipeline->get('greeting'));
+
+    $ran = false;
+    $callback = function () use (&$ran): void {
+        $ran = true;
+    };
+
+    expect(fn (): Redis|array|false => $connection->transaction($callback))->toThrowLostConnection();
+
+    expect($ran)->toBeFalse()
+        ->and($server->commands())->toBe(['SELECT 0', 'WATCH balance', 'GET greeting', 'MULTI', 'SELECT 0']);
+});
+
+it('clears the watch once a transaction runs, so a later read is replayed again', function (): void {
+    $server = FakeRedisServer::start(['serve:5', 'serve']);
+    $connection = recoveringConnection($server);
+    $connection->watch('balance');
+    $connection->transaction(fn (Redis $transaction): Redis|bool => $transaction->set('balance', '10'));
+
+    expect($connection->get('balance'))->toBe('10')
+        ->and($server->commands())->toBe(['SELECT 0', 'WATCH balance', 'MULTI', 'SET balance 10', 'EXEC', 'GET balance', 'SELECT 0', 'GET balance']);
+});
+
+it('tracks a MULTI sent through the connection one command at a time', function (string $end, array $commands): void {
+    $server = FakeRedisServer::start(['serve:4', 'serve']);
+    $connection = recoveringConnection($server);
+    $connection->multi();
+    $connection->select(3);
+    $connection->{$end}();
+
+    $connection->get('greeting');
+
+    expect($server->commands())->toBe($commands);
+})->with([
+    'run with EXEC' => ['exec', ['SELECT 0', 'MULTI', 'SELECT 3', 'EXEC', 'GET greeting', 'SELECT 0', 'SELECT 3', 'GET greeting']],
+    'dropped with DISCARD' => ['discard', ['SELECT 0', 'MULTI', 'SELECT 3', 'DISCARD', 'GET greeting', 'SELECT 0', 'GET greeting']],
+]);
 
 it('clears the watch after UNWATCH, so a later read is replayed again', function (): void {
     $server = FakeRedisServer::start(['serve:3', 'serve']);

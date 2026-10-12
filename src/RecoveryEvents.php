@@ -5,11 +5,13 @@ declare(strict_types=1);
 namespace Publicala\ResilientRedis;
 
 use Illuminate\Contracts\Events\Dispatcher;
+use Throwable;
 
 /**
  * Dispatches recovery events without letting a listener change the outcome
- * of the Redis call that recovered. A listener that fails is reported,
- * and one that recovers Redis itself does not dispatch again.
+ * of the Redis call that recovered. A listener that fails is reported, a
+ * report that fails is dropped, and a listener that recovers Redis
+ * itself does not dispatch again.
  */
 final class RecoveryEvents
 {
@@ -26,7 +28,9 @@ final class RecoveryEvents
         $this->dispatching = true;
 
         try {
-            rescue(fn () => $this->events->dispatch($event));
+            $this->events->dispatch($event);
+        } catch (Throwable $throwable) {
+            rescue(fn () => report($throwable), report: false);
         } finally {
             $this->dispatching = false;
         }

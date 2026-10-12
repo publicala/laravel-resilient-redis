@@ -6,7 +6,7 @@
 
 A managed Redis or Valkey drops connections now and then: a pooled socket goes stale, a TLS handshake gets reset, a failover moves the primary. Laravel retries a read that loses its connection mid-command (on 13.28 and later), but it never retries the **connect** itself, so the request, job or Horizon worker that happened to open the connection fails.
 
-This package retries a phpredis connect that fails fast and transiently, and gives Laravel 11 and 12 the lost-connection recovery that Laravel 13 ships. Install it and every phpredis connection uses it. No code changes.
+This package retries a phpredis connect that fails fast and transiently, and gives Laravel 11 and 12 the lost-connection recovery that Laravel 13 ships. Install it and every standalone phpredis connection uses it. No code changes.
 
 ```bash
 composer require publicala/laravel-resilient-redis
@@ -16,7 +16,7 @@ composer require publicala/laravel-resilient-redis
 
 ### Retries a connect that fails fast
 
-Every phpredis connect goes through the package: the first one, and each reconnect after a connection loses the server. A failed connect gets up to 2 more attempts, after a random wait of 100–200 ms, then 100–400 ms, when the failure is one that ends within milliseconds and clears by itself:
+Every connect Laravel's phpredis connector makes goes through the package: the first one, and each rebuild after a connection loses the server. A failed connect gets up to 2 more attempts, after a random wait of 100–200 ms, then 100–400 ms, when the failure is one that ends within milliseconds and usually clears by itself:
 
 | Failure | Typical cause |
 | --- | --- |
@@ -25,16 +25,18 @@ Every phpredis connect goes through the package: the first one, and each reconne
 | `Connection refused`, a missing Unix socket | The server is restarting |
 | `Temporary failure in name resolution` | The resolver failed for now |
 
-In production, every connect that failed on a pooled socket the server had dropped succeeded on its second attempt, 110–170 ms later.
+In one 30-day production sample, all 18 requests whose connect failed on a pooled socket the server had dropped succeeded on the second attempt, 110–170 ms later.
 
-The package **never retries** a failure that a retry cannot fix, or one that a retry would make worse:
+The forms above are matched by their message, so a lasting misconfiguration that produces one (a wrong port answers `Connection refused`) fails after the retries, at most about 0.6 seconds later than without the package.
+
+The package **never retries** these failures:
 
 - **A timeout.** A connect or TLS handshake that timed out means the server or the network is overloaded. Another attempt doubles the wait and adds a handshake to the pile.
-- **A stall.** A failure that took a second or more (a server that accepts the socket and never answers) would only stall again. A DNS failure is the exception: the resolver takes its own timeout to fail, so it gets a retry at any duration.
+- **A stall.** A failure that took a second or more (a server that accepts the socket and never answers) would only stall again. A DNS failure is the exception: the resolver takes its own timeout to fail, so it may be retried whatever its duration, within the window below.
 - **A configuration error.** Wrong credentials (`WRONGPASS`, `NOAUTH`), a certificate that does not verify, a server that does not speak TLS, a host name that does not exist.
 - **Anything else.** A failure the package cannot name is rethrown as is.
 
-No attempt starts more than 6 seconds after the first one began, so a resolver timeout gets one retry and a run of slow failures stops.
+No attempt starts 6 seconds or more after the first one began. A resolver that times out after 5 seconds gets one retry, a slower one gets none, and a resolver that fails fast gets up to two.
 
 ### Gives every connection a connect timeout
 
@@ -55,7 +57,7 @@ On Laravel 13.28 and later the package leaves this to the framework.
 
 ### Reports each recovery
 
-Each recovered connect dispatches `Publicala\ResilientRedis\Events\ConnectRecovered`, and each recovered read dispatches `Publicala\ResilientRedis\Events\CommandRecovered`. By default the package also logs one warning per recovery:
+Each recovered connect dispatches `Publicala\ResilientRedis\Events\ConnectRecovered`, and each read the package's own lost-connection recovery replays dispatches `Publicala\ResilientRedis\Events\CommandRecovered`. On Laravel 13.28 and later the framework replays reads itself, and the package reports only the connects. By default the package also logs one warning per recovery:
 
 ```text
 redis.connect.recovered {"host":"tls://cache.example.com","port":6379,"database":0,"persistent":true,"attempts":2,"milliseconds":143,"reason":"read_error"}
@@ -63,6 +65,10 @@ redis.command.recovered {"connection":"cache","command":"get","milliseconds":12,
 ```
 
 The events carry a reason code, never the exception text, arguments or credentials. A failing listener is reported and never changes the outcome of the Redis call.
+
+## Replacing a custom connector
+
+If your application registers its own phpredis connector (`Redis::extend('phpredis', ...)` or a `RedisManager::extend()` call in a service provider), remove it when you install the package. Both register the same driver, and the one registered last wins.
 
 ## Configuration
 
@@ -110,7 +116,7 @@ A changed switch takes effect once the config cache is rebuilt and long-running 
 - **Redis Cluster** connections use Laravel's stock path.
 - **Outside the recovery:** `scan` and its variants, `subscribe`, calls made on `client()` directly, and a pipeline or transaction opened without a callback (it returns the raw client). `executeRaw()` rebuilds the client but is never replayed.
 - **Laravel 13.28 to 13.32** recover reads but not pipelines and transactions, and 13.28 to 13.30 do not treat a TLS reset warning as a lost connection. Upgrade to 13.33 or later for both.
-- **phpredis retries on its own.** It reconnects an idle socket it finds closed before sending a command (`max_retries`, 10 by default). A `max_retries` you configure is applied after the connect, which Laravel 11 does not do.
+- **phpredis retries on its own.** It reconnects an idle socket it finds closed before sending a command (`max_retries`, 10 by default), without going through Laravel's connector, so the package neither retries nor reports those reconnects. A `max_retries` you configure is applied after the connect, which Laravel 11 does not do.
 - **A failed `SELECT` or `AUTH` that phpredis reports as `false` instead of an exception** still goes unnoticed, as it does in Laravel.
 
 ## Compatibility
