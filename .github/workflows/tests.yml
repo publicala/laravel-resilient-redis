@@ -10,8 +10,8 @@ name: Tests
 #
 # Each run mirrors a runtime publica.la runs: production (phpredis 6.3.0,
 # Valkey 9.0.0), CI (phpredis 6.3.0, Valkey 8.1.2) and local development
-# (PHP 8.3, phpredis 6.0.1, Valkey 8.1.2). A version joins a run when one of
-# them adopts it.
+# (arm64, PHP 8.3, phpredis 6.0.1, Valkey 8.1.2). A version joins a run when
+# one of them adopts it.
 
 on:
   workflow_call:
@@ -117,8 +117,9 @@ jobs:
   local:
     # Local development runs phpredis 6.0.1, which php-ci-static does not
     # bundle. setup-php is the only installer that pins a PECL version.
-    name: phpredis 6.0.1 · PHP 8.3 · Laravel ${{ matrix.laravel }} · Valkey 8.1.2
-    runs-on: depot-ubuntu-24.04
+    name: arm64 · phpredis 6.0.1 · PHP 8.3 · Laravel ${{ matrix.laravel }} · Valkey 8.1.2
+    # arm64: local development runs on Apple silicon, where phpredis 6.0.1 reports some broken sockets differently.
+    runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 10
     strategy:
       fail-fast: false
