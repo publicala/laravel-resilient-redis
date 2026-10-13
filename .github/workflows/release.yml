@@ -3,8 +3,8 @@ name: Release
 # Reusable body for the release cut. The orchestrator (ci.yml) owns the event
 # routing, the needs DAG, the green-CI gate and the ref hard-gate. This file
 # carries only the job body so the orchestrator stays readable. The caller
-# grants contents: write, since a called workflow only receives what the caller
-# grants.
+# grants contents: write and checks: read, since a called workflow only
+# receives what the caller grants.
 
 on:
   workflow_call:
@@ -60,6 +60,24 @@ jobs:
           fi
           echo "sha=$release_sha" >> "$GITHUB_OUTPUT"
           echo "Release commit for v$VERSION: $release_sha"
+
+      - name: Require a green CI run on the release commit
+        # This run tested github.sha. A manual run on a later main tags an older
+        # commit, so that commit's own ci-success check must have passed.
+        if: steps.intro.outputs.sha != github.sha
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.ver.outputs.version }}
+          RELEASE_SHA: ${{ steps.intro.outputs.sha }}
+        run: |
+          set -euo pipefail
+          conclusion=$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_SHA/check-runs?check_name=ci-success&filter=latest" \
+            --jq '.check_runs[0].conclusion // "missing"')
+          if [[ "$conclusion" != "success" ]]; then
+            echo "::error::v$VERSION would tag $RELEASE_SHA, whose ci-success check is '$conclusion'. Rerun that commit's CI if the failure was a flake, or ship the fix under a new version."
+            exit 1
+          fi
+          echo "ci-success passed on $RELEASE_SHA."
 
       - name: Check immutable tag state
         id: tag
