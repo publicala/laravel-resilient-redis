@@ -51,6 +51,19 @@ it('runs a read once more on a rebuilt client when the server drops the connecti
     'pconnect' => true,
 ]);
 
+it('runs a read once more on a rebuilt client after a READONLY reply, which leaves the old socket open', function (): void {
+    $server = FakeRedisServer::start(["error-after:2:READONLY You can't write against a read only replica.", 'serve']);
+    $reported = [];
+    $connection = recoveringConnection($server, $reported);
+    $connection->set('greeting', 'hello');
+
+    expect($connection->get('greeting'))->toBe('hello')
+        ->and($server->acceptedConnections())->toBe(2)
+        ->and($server->commands())->toBe(['SELECT 0', 'SET greeting hello', 'GET greeting', 'SELECT 0', 'GET greeting'])
+        ->and($reported)->toHaveCount(1)
+        ->and($reported[0]->reason)->toBe('readonly_replica');
+});
+
 it('rebuilds the client but never replays a write, because the server may already have run it', function (Closure $write, string $sent): void {
     $server = FakeRedisServer::start(['serve:1', 'serve']);
     $reported = [];
