@@ -23,9 +23,11 @@ declare(strict_types=1);
  *   stall                 accept and never answer
  *   error:MESSAGE         answer every command with "-MESSAGE"
  *   error-after:N:MESSAGE answer N commands, then "-MESSAGE" to every later one
+ *   garbage-after:N       answer N commands, then answer every later one with "X", a reply type RESP does not define
  *
  * With --tls-cert, a step that answers commands first completes a TLS handshake.
- * The bound "host:port" is printed on stdout. Every event is appended to --log.
+ * The bound "host:port" is printed on stdout. Every event is appended to --log,
+ * including "hangup N" when the client closes connection N.
  */
 
 $options = getopt('', ['plan:', 'log:', 'tls-cert::']);
@@ -61,7 +63,7 @@ $resetSocket = function ($stream): void {
     }
 };
 
-/** @var array<int, array{stream: resource, step: string, buffer: string, answered: int, stored: array<string, string>}> $clients */
+/** @var array<int, array{id: int, stream: resource, step: string, buffer: string, answered: int, stored: array<string, string>}> $clients */
 $clients = [];
 $accepted = 0;
 $store = [];
@@ -93,7 +95,7 @@ while (true) {
                 continue;
             }
 
-            $answersCommands = str_starts_with($step, 'serve') || str_starts_with($step, 'error');
+            $answersCommands = str_starts_with($step, 'serve') || str_starts_with($step, 'error') || str_starts_with($step, 'garbage');
 
             if ($tlsCert !== null && $answersCommands) {
                 stream_context_set_option($connection, 'ssl', 'local_cert', $tlsCert);
@@ -107,7 +109,7 @@ while (true) {
                 }
             }
 
-            $clients[(int) $connection] = ['stream' => $connection, 'step' => $step, 'buffer' => '', 'answered' => 0, 'queued' => null];
+            $clients[(int) $connection] = ['id' => $accepted, 'stream' => $connection, 'step' => $step, 'buffer' => '', 'answered' => 0, 'queued' => null];
 
             continue;
         }
@@ -117,6 +119,7 @@ while (true) {
 
         if ($chunk === false || $chunk === '') {
             if (feof($stream)) {
+                $record("hangup {$client['id']}");
                 @fclose($stream);
                 unset($clients[(int) $stream]);
             }
@@ -180,7 +183,7 @@ while (true) {
                     continue 2;
                 }
 
-                fwrite($stream, "-{$message}\r\n");
+                fwrite($stream, $kind === 'garbage-after' ? "X\r\n" : "-{$message}\r\n");
                 $client['answered']++;
 
                 continue;

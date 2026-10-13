@@ -38,7 +38,8 @@ final class Failure
     ];
 
     /**
-     * The command failures Laravel 13 treats as a lost connection.
+     * The command failures Laravel 13 treats as a lost connection, and a protocol
+     * error, which leaves the client reading a reply stream out of step.
      *
      * @var array<string, string>
      */
@@ -50,6 +51,7 @@ final class Failure
         'went away' => 'server_went_away',
         'READONLY' => 'readonly_replica',
         'socket' => 'socket_error',
+        'protocol error' => 'protocol_error',
     ];
 
     /**

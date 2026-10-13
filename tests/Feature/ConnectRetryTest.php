@@ -8,6 +8,7 @@ use Illuminate\Redis\Connectors\PhpRedisConnector;
 use Illuminate\Support\Sleep;
 use Illuminate\Support\Str;
 use Publicala\ResilientRedis\Events\ConnectRecovered;
+use Publicala\ResilientRedis\NativeRecoveryPhpRedisConnection;
 use Publicala\ResilientRedis\ResilientPhpRedisConnection;
 use Publicala\ResilientRedis\ResilientPhpRedisConnector;
 use Publicala\ResilientRedis\Tests\Support\FakeRedisServer;
@@ -124,6 +125,17 @@ it('does not retry a reply that stalled for a second', function (): void {
     Sleep::assertNeverSlept();
 });
 
+it('does not retry a protocol error during the connect, since a server that is not Redis would answer the same', function (): void {
+    $server = FakeRedisServer::start(['garbage-after:0']);
+    $reported = [];
+
+    expect(fn (): PhpRedisConnection => connectorReportingTo($reported)->connect($server->config(), []))
+        ->toThrow(RedisException::class, 'protocol error');
+
+    expect($server->acceptedConnections())->toBe(1);
+    Sleep::assertNeverSlept();
+});
+
 it('does not retry a server that rejects the credentials', function (): void {
     $server = FakeRedisServer::start(['error:WRONGPASS invalid username-password pair or user is disabled.']);
     $reported = [];
@@ -231,21 +243,27 @@ it('keeps the phpredis retry options the connection configures', function (): vo
         ->and($client->getOption(Redis::OPT_BACKOFF_CAP))->toBe(50);
 });
 
-it('returns the stock connection unless asked to recover lost connections', function (bool $recover, string $class): void {
+it('returns the stock connection unless asked to recover lost connections', function (): void {
     $server = FakeRedisServer::start(['serve']);
     $reported = [];
 
-    $connection = connectorReportingTo($reported, recoverLostConnections: $recover)->connect($server->config(['prefix' => 'acme:']), []);
+    $connection = connectorReportingTo($reported)->connect($server->config(['prefix' => 'acme:']), []);
 
-    expect($connection)->toBeInstanceOf(PhpRedisConnection::class)
-        ->and($connection::class)->toBe($class)
+    expect($connection::class)->toBe(PhpRedisConnection::class)
         ->and($connection->client()->getOption(Redis::OPT_PREFIX))->toBe('acme:');
-})->with([
-    'stock' => [false, PhpRedisConnection::class],
-    'recovering' => [true, ResilientPhpRedisConnection::class],
-]);
+});
 
-it('reports whether this Laravel version recovers lost connections on its own', function (): void {
-    expect(ResilientPhpRedisConnector::frameworkRecoversLostConnections())
-        ->toBe(method_exists(PhpRedisConnection::class, 'isRetryable'));
+it('returns the package recovery before Laravel 13.33, and the extended Laravel recovery from then on', function (): void {
+    $server = FakeRedisServer::start(['serve']);
+    $reported = [];
+
+    $connection = connectorReportingTo($reported, recoverLostConnections: true)->connect($server->config(['prefix' => 'acme:']), []);
+
+    expect($connection::class)->toBe(ResilientPhpRedisConnector::frameworkHasLostConnectionHooks() ? NativeRecoveryPhpRedisConnection::class : ResilientPhpRedisConnection::class)
+        ->and($connection->client()->getOption(Redis::OPT_PREFIX))->toBe('acme:');
+});
+
+it('reports whether this Laravel version recovers lost connections through hooks the package can extend', function (): void {
+    expect(ResilientPhpRedisConnector::frameworkHasLostConnectionHooks())
+        ->toBe(method_exists(PhpRedisConnection::class, 'causedByLostConnection'));
 });

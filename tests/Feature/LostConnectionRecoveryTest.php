@@ -13,19 +13,22 @@ use Publicala\ResilientRedis\ResilientPhpRedisConnector;
 use Publicala\ResilientRedis\Tests\Support\FakeRedisServer;
 
 /**
- * A recovering connection to the server, named "cache", that records what it reports.
+ * The package's own recovering connection to the server, named "cache", that records what it reports.
+ *
+ * Built directly, since the connector returns Laravel's extended recovery from 13.33 on.
  *
  * @param  array<string, mixed>  $overrides
  * @param  list<object>  $reported
  */
 function recoveringConnection(FakeRedisServer $server, array &$reported = [], array $overrides = []): ResilientPhpRedisConnection
 {
-    $connection = (new ResilientPhpRedisConnector(
-        recoverLostConnections: true,
-        report: function (object $event) use (&$reported): void {
-            $reported[] = $event;
-        },
-    ))->connect($server->config($overrides), []);
+    $report = function (object $event) use (&$reported): void {
+        $reported[] = $event;
+    };
+    $config = $server->config($overrides);
+    $connector = fn (): Redis => (new ResilientPhpRedisConnector(report: $report))->connect($config, [])->client();
+
+    $connection = new ResilientPhpRedisConnection($connector(), $connector, $config, $report);
 
     $connection->setName('cache');
     $connection->setEventDispatcher(resolve(Dispatcher::class));
@@ -62,6 +65,33 @@ it('runs a read once more on a rebuilt client after a READONLY reply, which leav
         ->and($server->commands())->toBe(['SELECT 0', 'SET greeting hello', 'GET greeting', 'SELECT 0', 'GET greeting'])
         ->and($reported)->toHaveCount(1)
         ->and($reported[0]->reason)->toBe('readonly_replica');
+});
+
+it('runs a read once more on a rebuilt client after a protocol error, and closes the socket that went out of step', function (bool $persistent): void {
+    $server = FakeRedisServer::start(['garbage-after:2', 'serve']);
+    $reported = [];
+    $connection = recoveringConnection($server, $reported, ['persistent' => $persistent, 'persistent_id' => Str::random()]);
+    $connection->set('greeting', 'hello');
+
+    expect($connection->get('greeting'))->toBe('hello')
+        ->and($server->commands())->toBe(['SELECT 0', 'SET greeting hello', 'GET greeting', 'SELECT 0', 'GET greeting'])
+        ->and($server->hungUp(1))->toBeTrue()
+        ->and($reported)->toHaveCount(1)
+        ->and($reported[0]->reason)->toBe('protocol_error');
+})->with([
+    'connect' => false,
+    'pconnect' => true,
+]);
+
+it('gives up when the replayed read hits a protocol error too', function (): void {
+    $server = FakeRedisServer::start(['garbage-after:1']);
+    $reported = [];
+    $connection = recoveringConnection($server, $reported);
+
+    expect(fn () => $connection->get('greeting'))->toThrow(RedisException::class, 'protocol error');
+
+    expect($server->commands())->toBe(['SELECT 0', 'GET greeting', 'SELECT 0', 'GET greeting', 'SELECT 0'])
+        ->and($reported)->toBeEmpty();
 });
 
 it('rebuilds the client but never replays a write, because the server may already have run it', function (Closure $write, string $sent): void {

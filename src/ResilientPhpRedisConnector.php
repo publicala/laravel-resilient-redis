@@ -29,7 +29,7 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
     public const float DEFAULT_TIMEOUT = 2.0;
 
     /**
-     * @param  bool  $recoverLostConnections  Return connections that rebuild a lost client and retry reads, for Laravel versions without that handling.
+     * @param  bool  $recoverLostConnections  Return connections that recover a lost connection: the package's own before Laravel 13.33, Laravel's extended from then on.
      * @param  (Closure(object): void)|null  $report
      * @param  (Closure(): float)|null  $clock  Milliseconds on a monotonic clock.
      */
@@ -40,11 +40,11 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
     ) {}
 
     /**
-     * Whether this Laravel version rebuilds a lost connection and retries reads on its own (13.28 and later).
+     * Whether this Laravel version recovers a lost connection through hooks the package can extend (13.33 and later).
      */
-    public static function frameworkRecoversLostConnections(): bool
+    public static function frameworkHasLostConnectionHooks(): bool
     {
-        return (new ReflectionClass(PhpRedisConnection::class))->hasMethod('isRetryable');
+        return (new ReflectionClass(PhpRedisConnection::class))->hasMethod('causedByLostConnection');
     }
 
     /**
@@ -64,8 +64,9 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
         }
 
         $connector = fn (): Redis => $this->createClient(array_merge($config, $options, $formattedOptions));
+        $connection = self::frameworkHasLostConnectionHooks() ? NativeRecoveryPhpRedisConnection::class : ResilientPhpRedisConnection::class;
 
-        return new ResilientPhpRedisConnection($connector(), $connector, $config, $this->report);
+        return new $connection($connector(), $connector, $config, $this->report);
     }
 
     /**

@@ -5,13 +5,13 @@ declare(strict_types=1);
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Redis\Factory;
-use Illuminate\Redis\Connections\PhpRedisConnection;
 use Illuminate\Redis\Connectors\PhpRedisConnector;
 use Illuminate\Redis\RedisManager;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\ServiceProvider;
 use Publicala\ResilientRedis\Events\CommandRecovered;
 use Publicala\ResilientRedis\Events\ConnectRecovered;
+use Publicala\ResilientRedis\NativeRecoveryPhpRedisConnection;
 use Publicala\ResilientRedis\RecoveryEvents;
 use Publicala\ResilientRedis\ResilientPhpRedisConnection;
 use Publicala\ResilientRedis\ResilientPhpRedisConnector;
@@ -31,17 +31,16 @@ it('connects every phpredis connection through the resilient connector', functio
     $connector = phpRedisConnectorOf(resolve(Factory::class));
 
     expect($connector)->toBeInstanceOf(ResilientPhpRedisConnector::class)
-        ->and(recoveryOptionOf($connector))->toBe(! ResilientPhpRedisConnector::frameworkRecoversLostConnections());
+        ->and(recoveryOptionOf($connector))->toBeTrue();
 });
 
-it('opens connections that recover only where Laravel does not', function (): void {
+it('opens connections that recover a lost connection on every Laravel version', function (): void {
     $connection = resolve(Factory::class)->connection();
 
-    expect($connection)->toBeInstanceOf(PhpRedisConnection::class)
-        ->and($connection instanceof ResilientPhpRedisConnection)->toBe(! ResilientPhpRedisConnector::frameworkRecoversLostConnections());
+    expect($connection::class)->toBe(ResilientPhpRedisConnector::frameworkHasLostConnectionHooks() ? NativeRecoveryPhpRedisConnection::class : ResilientPhpRedisConnection::class);
 });
 
-it('leaves lost connections to Laravel when the backport is turned off', function (): void {
+it('leaves lost connections to Laravel when the recovery is turned off', function (): void {
     config(['resilient-redis.recover_lost_connections' => false]);
     app()->forgetInstance('redis');
 
@@ -59,7 +58,7 @@ it('reads its switches with defaults when the config file is missing from a cach
     config(['resilient-redis' => null]);
     app()->forgetInstance('redis');
 
-    expect(recoveryOptionOf(phpRedisConnectorOf(resolve(Factory::class))))->toBe(! ResilientPhpRedisConnector::frameworkRecoversLostConnections());
+    expect(recoveryOptionOf(phpRedisConnectorOf(resolve(Factory::class))))->toBeTrue();
 });
 
 it('casts operator spellings of the switches', function (string $value, bool $enabled): void {

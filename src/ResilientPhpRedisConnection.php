@@ -13,13 +13,15 @@ use Redis;
 use Throwable;
 
 /**
- * Recovers from a lost connection on Laravel versions that do not: the
+ * Recovers from a lost connection on Laravel versions before 13.33: the
  * client is rebuilt through the connector, and a read runs once more on
  * the new one. Adapted from Laravel 13's PhpRedisConnection (MIT
  * License, Copyright (c) Taylor Otwell), replaying reads only.
  */
 final class ResilientPhpRedisConnection extends PhpRedisConnection
 {
+    use ReleasesLostClients;
+
     /**
      * The commands that read without changing anything, so running one twice returns what running it once would.
      *
@@ -322,11 +324,7 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
         $previous = $this->client;
         $options = collect(self::RUNTIME_OPTIONS)->mapWithKeys(fn (int $option): array => [$option => $previous->getOption($option)]);
 
-        // Closing a client that still holds its socket (a READONLY reply after a failover) lets a persistent one release
-        // it to the pool. phpredis reconnects a failed client just to close it, so a failed one is left alone.
-        if ($previous->isConnected()) {
-            rescue(fn (): bool => $previous->close(), null, false);
-        }
+        $this->releaseLostClient($previous);
 
         $this->watching = false;
         $this->watchQueued = false;
