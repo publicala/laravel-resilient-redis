@@ -24,6 +24,9 @@ jobs:
     # suite everywhere else.
     name: Gate · PHP 8.4 · Laravel 13 · Valkey 9.0.0
     runs-on: depot-ubuntu-24.04
+    # A run takes about a minute. Without a limit, a stuck test holds the runner
+    # for GitHub's 6-hour default.
+    timeout-minutes: 10
     services:
       valkey:
         image: valkey/valkey:9.0.0
@@ -60,6 +63,7 @@ jobs:
     # php-ci-static bundles phpredis 6.3.0, the release production and CI run.
     name: PHP ${{ matrix.php }} · Laravel ${{ matrix.laravel }} · Valkey ${{ matrix.valkey }}
     runs-on: depot-ubuntu-24.04
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -115,6 +119,7 @@ jobs:
     # bundle. setup-php is the only installer that pins a PECL version.
     name: phpredis 6.0.1 · PHP 8.3 · Laravel ${{ matrix.laravel }} · Valkey 8.1.2
     runs-on: depot-ubuntu-24.04
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
