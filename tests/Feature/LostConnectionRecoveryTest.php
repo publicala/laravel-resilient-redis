@@ -13,22 +13,19 @@ use Publicala\ResilientRedis\ResilientPhpRedisConnector;
 use Publicala\ResilientRedis\Tests\Support\FakeRedisServer;
 
 /**
- * The package's own recovering connection to the server, named "cache", that records what it reports.
- *
- * Built directly, since the connector returns Laravel's extended recovery from 13.33 on.
+ * A recovering connection to the server, named "cache", that records what it reports.
  *
  * @param  array<string, mixed>  $overrides
  * @param  list<object>  $reported
  */
 function recoveringConnection(FakeRedisServer $server, array &$reported = [], array $overrides = []): ResilientPhpRedisConnection
 {
-    $report = function (object $event) use (&$reported): void {
-        $reported[] = $event;
-    };
-    $config = $server->config($overrides);
-    $connector = fn (): Redis => (new ResilientPhpRedisConnector(report: $report))->connect($config, [])->client();
-
-    $connection = new ResilientPhpRedisConnection($connector(), $connector, $config, $report);
+    $connection = (new ResilientPhpRedisConnector(
+        recoverLostConnections: true,
+        report: function (object $event) use (&$reported): void {
+            $reported[] = $event;
+        },
+    ))->connect($server->config($overrides), []);
 
     $connection->setName('cache');
     $connection->setEventDispatcher(resolve(Dispatcher::class));
@@ -426,6 +423,19 @@ it('counts a WATCH a pipeline sent through the connection once the pipeline runs
     expect(fn () => $connection->get('balance'))->toThrowLostConnection();
 
     expect($server->commands())->toBe(['SELECT 0', 'WATCH balance', 'GET balance', 'SELECT 0']);
+});
+
+it('runs a read once more after a disconnect ended the WATCH', function (): void {
+    $server = FakeRedisServer::start(['serve', 'close-on-first-read', 'serve']);
+    $reported = [];
+    $connection = recoveringConnection($server, $reported);
+    $connection->set('greeting', 'hello');
+    $connection->watch('greeting');
+    $connection->disconnect();
+
+    expect($connection->get('greeting'))->toBe('hello')
+        ->and($server->acceptedConnections())->toBe(3)
+        ->and($reported)->toHaveCount(1);
 });
 
 it('treats a WATCH sent by a pipeline that failed as open', function (): void {

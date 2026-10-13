@@ -23,9 +23,9 @@ return [
     |--------------------------------------------------------------------------
     |
     | Rebuild the client after a command loses the server, and run a read
-    | once more. Before Laravel 13.33 the package recovers on its own, and
-    | from 13.33 it extends Laravel's recovery. When false, phpredis
-    | connections keep Laravel's own handling.
+    | once more, on every Laravel version. From 13.28 this replaces
+    | Laravel's own recovery. When false, phpredis connections keep
+    | Laravel's own handling.
     |
     */
 

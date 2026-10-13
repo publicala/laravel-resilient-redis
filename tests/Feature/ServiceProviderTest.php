@@ -11,7 +11,6 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\ServiceProvider;
 use Publicala\ResilientRedis\Events\CommandRecovered;
 use Publicala\ResilientRedis\Events\ConnectRecovered;
-use Publicala\ResilientRedis\NativeRecoveryPhpRedisConnection;
 use Publicala\ResilientRedis\RecoveryEvents;
 use Publicala\ResilientRedis\ResilientPhpRedisConnection;
 use Publicala\ResilientRedis\ResilientPhpRedisConnector;
@@ -35,9 +34,7 @@ it('connects every phpredis connection through the resilient connector', functio
 });
 
 it('opens connections that recover a lost connection on every Laravel version', function (): void {
-    $connection = resolve(Factory::class)->connection();
-
-    expect($connection::class)->toBe(ResilientPhpRedisConnector::frameworkHasLostConnectionHooks() ? NativeRecoveryPhpRedisConnection::class : ResilientPhpRedisConnection::class);
+    expect(resolve(Factory::class)->connection())->toBeInstanceOf(ResilientPhpRedisConnection::class);
 });
 
 it('leaves lost connections to Laravel when the recovery is turned off', function (): void {

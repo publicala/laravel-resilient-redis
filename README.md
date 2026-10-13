@@ -44,7 +44,7 @@ A connection with no `timeout` gets one of 2 seconds. Without it, a connect to a
 
 ### Recovers a lost connection
 
-Laravel 13.28 and later rebuild a phpredis client that loses its connection mid-command and run a read once more. Before 13.33 the package does the same with its own recovery, more conservatively:
+Laravel 13.28 and later rebuild a phpredis client that loses its connection mid-command and run a read once more. The package does the same on every Laravel version, in place of Laravel's own recovery, and more conservatively:
 
 - **Reads only.** A read (`GET`, `HGETALL`, `ZRANGE` and the like) runs once more on the rebuilt client. A write (`SET`, `INCR`, `EVAL`, a queue push) is never replayed, because the server may have run it before the reply was lost. The client is still rebuilt, so the next command works.
 - **Never inside a WATCH, a MULTI or a pipeline.** The watch dies with the old socket, and a queued command would run outside its batch, so the error is rethrown after the rebuild. When the package cannot tell whether a WATCH is still open (one a pipeline sent, or an UNWATCH a pipeline queued), it treats the watch as open, which only costs the replay.
@@ -57,7 +57,7 @@ A protocol error (`protocol error, got 'X' as reply type byte`) counts as a lost
 
 A lost client that still holds its socket is closed before it is replaced. Otherwise phpredis returns a persistent client's socket to its pool, where the next connect would reuse it.
 
-On Laravel 13.33 and later the package keeps Laravel's own recovery and its retry policy, which also replays a plain `SET` and, with `command_retries`, any command. It extends it with the protocol error, the close of the lost client and the recovery report.
+Laravel's `command_retries` is not used while the recovery is on, so no write is replayed. Turn `recover_lost_connections` off to keep Laravel's own recovery instead.
 
 ### Reports each recovery
 
