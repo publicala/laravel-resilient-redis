@@ -21,10 +21,10 @@
     ],
     "require": {
         "php": "^8.3",
-        "ext-redis": "^6.0",
-        "illuminate/contracts": "^11.0|^12.0|^13.0",
-        "illuminate/redis": "^11.0|^12.0|^13.0",
-        "illuminate/support": "^11.0|^12.0|^13.0"
+        "ext-redis": "^6.0.1",
+        "illuminate/contracts": "^11.48|^12.64|^13.23",
+        "illuminate/redis": "^11.48|^12.64|^13.23",
+        "illuminate/support": "^11.48|^12.64|^13.23"
     },
     "require-dev": {
         "driftingly/rector-laravel": "^2.0",

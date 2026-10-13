@@ -5,7 +5,7 @@ Pest `it()` only. Every file declares `declare(strict_types=1)`.
 ## Two servers
 
 - **`Support/FakeRedisServer`** starts `Support/fake-redis-server.php` in a child process: a scripted RESP server whose plan sets what each accepted connection does (`serve`, `serve:N`, `close`, `reset`, `stall`, `error:MESSAGE`, TLS with `tls: true`, ...; the script's header lists every step). Use it for any failure a healthy server cannot produce on demand. `commands()` and `acceptedConnections()` read its log.
-- **A real Valkey or Redis on port 6390** (`REDIS_TEST_PORT` overrides it) backs `TestCase`'s connections, for behavior a script cannot fake. Locally: `docker run --rm -d -p 6390:6379 valkey/valkey:9.0`.
+- **A real Valkey or Redis on port 6390** (`REDIS_TEST_PORT` overrides it) backs `TestCase`'s connections, for behavior a script cannot fake. Locally: `docker run --rm -d -p 6390:6379 valkey/valkey:9.0.0`.
 
 `fake-redis-server.php` runs without an autoloader and parses bytes, so Pint and Rector skip it. Keep it on PHP's byte functions.
 

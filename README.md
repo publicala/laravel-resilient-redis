@@ -128,17 +128,19 @@ The package supports the versions publica.la runs in production, CI and local de
 | --- | --- |
 | PHP | 8.3, 8.4, 8.5 |
 | Laravel | 11.48 and later 11.x, 12.64 and later 12.x, 13.23 and later 13.x |
-| phpredis | 6.0.1, 6.3 |
-| Server | Valkey 8.1, 9.0 |
+| phpredis | 6.0.1, 6.3.0 |
+| Server | Valkey 8.1.2, 9.0.0 |
 
-phpredis 5 is not supported: after a read error it still reports the client as connected, and `close()` reconnects it. Ubuntu 24.04 packages phpredis 5.3.7, so on its stock PHP install 6.x with `pecl install redis` or from the [ondrej/php](https://launchpad.net/~ondrej/+archive/ubuntu/php) PPA.
+PHP 8.3 runs with Laravel 11 and 12, PHP 8.4 with Laravel 12 and 13, and PHP 8.5 with Laravel 13. CI tests each of these pairs, the oldest Laravel release of each major, and the latest.
+
+phpredis 5 is not supported: after a read error it still reports the client as connected, and `close()` reconnects it. Ubuntu 24.04 packages phpredis 5.3.7, so on its stock PHP install 6.3 with `pecl install redis` or from the [ondrej/php](https://launchpad.net/~ondrej/+archive/ubuntu/php) PPA.
 
 ## Testing
 
 The suite drives real phpredis clients against a scripted RESP server it starts itself, and against a real Valkey or Redis on port 6390:
 
 ```bash
-docker run --rm -d -p 6390:6379 valkey/valkey:9.0
+docker run --rm -d -p 6390:6379 valkey/valkey:9.0.0
 composer test
 ```
 

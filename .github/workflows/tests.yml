@@ -8,9 +8,10 @@ name: Tests
 # itself, plus a real Valkey for the paths a script cannot fake (CLIENT KILL,
 # persistent pools).
 #
-# Each run mirrors a runtime publica.la runs: production (phpredis 6.3,
-# Valkey 9.0), CI (phpredis 6.3, Valkey 8.1) and local development (PHP 8.3,
-# phpredis 6.0.1, Valkey 8.1). A version joins a run when one of them adopts it.
+# Each run mirrors a runtime publica.la runs: production (phpredis 6.3.0,
+# Valkey 9.0.0), CI (phpredis 6.3.0, Valkey 8.1.2) and local development
+# (PHP 8.3, phpredis 6.0.1, Valkey 8.1.2). A version joins a run when one of
+# them adopts it.
 
 on:
   workflow_call:
@@ -21,11 +22,11 @@ jobs:
     # version (the lost-connection backport, CommandFailed), so 100% line
     # coverage holds on the latest version only. The jobs below run the same
     # suite everywhere else.
-    name: Gate · PHP 8.4 · Laravel 13 · Valkey 9.0
+    name: Gate · PHP 8.4 · Laravel 13 · Valkey 9.0.0
     runs-on: depot-ubuntu-24.04
     services:
       valkey:
-        image: valkey/valkey:9.0
+        image: valkey/valkey:9.0.0
         ports: ['6390:6379']
         options: --health-cmd "valkey-cli ping" --health-interval 2s --health-timeout 2s --health-retries 15
     env:
@@ -56,7 +57,7 @@ jobs:
         run: composer run-script test:coverage
 
   matrix:
-    # php-ci-static bundles phpredis 6.3, the release production and CI run.
+    # php-ci-static bundles phpredis 6.3.0, the release production and CI run.
     name: PHP ${{ matrix.php }} · Laravel ${{ matrix.laravel }} · Valkey ${{ matrix.valkey }}
     runs-on: depot-ubuntu-24.04
     strategy:
@@ -64,25 +65,24 @@ jobs:
       matrix:
         include:
           # Each PHP and Laravel pair in use. The gate covers PHP 8.4 with
-          # Laravel 13. CI runs the PHP 8.3 projects against Valkey 8.1.
-          - { php: '8.3', laravel: '11.*', valkey: '9.0' }
-          - { php: '8.3', laravel: '11.*', valkey: '8.1' }
-          - { php: '8.3', laravel: '12.*', valkey: '9.0' }
-          - { php: '8.3', laravel: '12.*', valkey: '8.1' }
-          - { php: '8.4', laravel: '12.*', valkey: '9.0' }
-          - { php: '8.5', laravel: '13.*', valkey: '9.0' }
+          # Laravel 13. CI runs the PHP 8.3 projects against Valkey 8.1.2.
+          - { php: '8.3', laravel: '11.*', valkey: '9.0.0' }
+          - { php: '8.3', laravel: '11.*', valkey: '8.1.2' }
+          - { php: '8.3', laravel: '12.*', valkey: '9.0.0' }
+          - { php: '8.3', laravel: '12.*', valkey: '8.1.2' }
+          - { php: '8.4', laravel: '12.*', valkey: '9.0.0' }
+          - { php: '8.5', laravel: '13.*', valkey: '9.0.0' }
           # The releases where Laravel's own lost-connection handling changes:
           # 13.27 has none, 13.28 retries reads, 13.31 adds TLS resets, 13.33
           # adds pipelines and transactions.
-          - { php: '8.4', laravel: '13.27.*', valkey: '9.0' }
-          - { php: '8.4', laravel: '13.28.*', valkey: '9.0' }
-          - { php: '8.4', laravel: '13.31.*', valkey: '9.0' }
-          - { php: '8.4', laravel: '13.33.*', valkey: '9.0' }
+          - { php: '8.4', laravel: '13.27.*', valkey: '9.0.0' }
+          - { php: '8.4', laravel: '13.28.*', valkey: '9.0.0' }
+          - { php: '8.4', laravel: '13.31.*', valkey: '9.0.0' }
+          - { php: '8.4', laravel: '13.33.*', valkey: '9.0.0' }
           # The oldest release of each major in use, on each PHP it runs on.
-          - { php: '8.3', laravel: '11.48.*', valkey: '9.0' }
-          - { php: '8.4', laravel: '12.64.*', valkey: '9.0' }
-          - { php: '8.4', laravel: '13.23.*', valkey: '9.0' }
-          - { php: '8.5', laravel: '13.23.*', valkey: '9.0' }
+          - { php: '8.3', laravel: '11.48.*', valkey: '9.0.0' }
+          - { php: '8.4', laravel: '12.64.*', valkey: '9.0.0' }
+          - { php: '8.5', laravel: '13.23.*', valkey: '9.0.0' }
     services:
       valkey:
         image: valkey/valkey:${{ matrix.valkey }}
@@ -113,7 +113,7 @@ jobs:
   local:
     # Local development runs phpredis 6.0.1, which php-ci-static does not
     # bundle. setup-php is the only installer that pins a PECL version.
-    name: phpredis 6.0.1 · PHP 8.3 · Laravel ${{ matrix.laravel }} · Valkey 8.1
+    name: phpredis 6.0.1 · PHP 8.3 · Laravel ${{ matrix.laravel }} · Valkey 8.1.2
     runs-on: depot-ubuntu-24.04
     strategy:
       fail-fast: false
@@ -121,7 +121,7 @@ jobs:
         laravel: ['11.*', '12.*']
     services:
       valkey:
-        image: valkey/valkey:8.1
+        image: valkey/valkey:8.1.2
         ports: ['6390:6379']
         options: --health-cmd "valkey-cli ping" --health-interval 2s --health-timeout 2s --health-retries 15
     env:
