@@ -122,11 +122,14 @@ A changed switch takes effect once the config cache is rebuilt and long-running 
 
 ## Compatibility
 
+The package supports the versions publica.la runs in production, CI and local development, and adds a version when one of them adopts it.
+
 | | Supported |
 | --- | --- |
 | PHP | 8.3, 8.4, 8.5 |
-| Laravel | 11, 12, 13 |
-| phpredis | 6.0 to 6.3 |
+| Laravel | 11.48 and later 11.x, 12.64 and later 12.x, 13.23 and later 13.x |
+| phpredis | 6.0.1, 6.3 |
+| Server | Valkey 8.1, 9.0 |
 
 phpredis 5 is not supported: after a read error it still reports the client as connected, and `close()` reconnects it. Ubuntu 24.04 packages phpredis 5.3.7, so on its stock PHP install 6.x with `pecl install redis` or from the [ondrej/php](https://launchpad.net/~ondrej/+archive/ubuntu/php) PPA.
 
@@ -135,7 +138,7 @@ phpredis 5 is not supported: after a read error it still reports the client as c
 The suite drives real phpredis clients against a scripted RESP server it starts itself, and against a real Valkey or Redis on port 6390:
 
 ```bash
-docker run --rm -d -p 6390:6379 valkey/valkey:8.1
+docker run --rm -d -p 6390:6379 valkey/valkey:9.0
 composer test
 ```
 

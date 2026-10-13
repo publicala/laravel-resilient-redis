@@ -7,6 +7,10 @@ name: Tests
 # The suite drives real phpredis clients against a scripted server it starts
 # itself, plus a real Valkey for the paths a script cannot fake (CLIENT KILL,
 # persistent pools).
+#
+# Each run mirrors a runtime publica.la runs: production (phpredis 6.3,
+# Valkey 9.0), CI (phpredis 6.3, Valkey 8.1) and local development (PHP 8.3,
+# phpredis 6.0.1, Valkey 8.1). A version joins a run when one of them adopts it.
 
 on:
   workflow_call:
@@ -15,13 +19,13 @@ jobs:
   gate:
     # The full gate runs once: the package branches on the installed Laravel
     # version (the lost-connection backport, CommandFailed), so 100% line
-    # coverage holds on the latest version only. The matrix below runs the
-    # same suite everywhere else.
-    name: Gate · PHP 8.4 · Laravel 13
+    # coverage holds on the latest version only. The jobs below run the same
+    # suite everywhere else.
+    name: Gate · PHP 8.4 · Laravel 13 · Valkey 9.0
     runs-on: depot-ubuntu-24.04
     services:
       valkey:
-        image: valkey/valkey:8.1
+        image: valkey/valkey:9.0
         ports: ['6390:6379']
         options: --health-cmd "valkey-cli ping" --health-interval 2s --health-timeout 2s --health-retries 15
     env:
@@ -52,32 +56,36 @@ jobs:
         run: composer run-script test:coverage
 
   matrix:
-    name: PHP ${{ matrix.php }} · Laravel ${{ matrix.laravel }}
+    # php-ci-static bundles phpredis 6.3, the release production and CI run.
+    name: PHP ${{ matrix.php }} · Laravel ${{ matrix.laravel }} · Valkey ${{ matrix.valkey }}
     runs-on: depot-ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        php: ['8.3', '8.4', '8.5']
-        laravel: ['11.*', '12.*', '13.*']
-        exclude:
-          # Laravel 11 does not support PHP 8.5.
-          - php: '8.5'
-            laravel: '11.*'
         include:
+          # Each PHP and Laravel pair in use. The gate covers PHP 8.4 with
+          # Laravel 13. CI runs the PHP 8.3 projects against Valkey 8.1.
+          - { php: '8.3', laravel: '11.*', valkey: '9.0' }
+          - { php: '8.3', laravel: '11.*', valkey: '8.1' }
+          - { php: '8.3', laravel: '12.*', valkey: '9.0' }
+          - { php: '8.3', laravel: '12.*', valkey: '8.1' }
+          - { php: '8.4', laravel: '12.*', valkey: '9.0' }
+          - { php: '8.5', laravel: '13.*', valkey: '9.0' }
           # The releases where Laravel's own lost-connection handling changes:
           # 13.27 has none, 13.28 retries reads, 13.31 adds TLS resets, 13.33
           # adds pipelines and transactions.
-          - { php: '8.4', laravel: '13.27.*' }
-          - { php: '8.4', laravel: '13.28.*' }
-          - { php: '8.4', laravel: '13.31.*' }
-          - { php: '8.4', laravel: '13.33.*' }
-          # The oldest release of each major that a known consumer runs.
-          - { php: '8.3', laravel: '11.48.*' }
-          - { php: '8.4', laravel: '12.64.*' }
-          - { php: '8.4', laravel: '13.23.*' }
+          - { php: '8.4', laravel: '13.27.*', valkey: '9.0' }
+          - { php: '8.4', laravel: '13.28.*', valkey: '9.0' }
+          - { php: '8.4', laravel: '13.31.*', valkey: '9.0' }
+          - { php: '8.4', laravel: '13.33.*', valkey: '9.0' }
+          # The oldest release of each major in use, on each PHP it runs on.
+          - { php: '8.3', laravel: '11.48.*', valkey: '9.0' }
+          - { php: '8.4', laravel: '12.64.*', valkey: '9.0' }
+          - { php: '8.4', laravel: '13.23.*', valkey: '9.0' }
+          - { php: '8.5', laravel: '13.23.*', valkey: '9.0' }
     services:
       valkey:
-        image: valkey/valkey:8.1
+        image: valkey/valkey:${{ matrix.valkey }}
         ports: ['6390:6379']
         options: --health-cmd "valkey-cli ping" --health-interval 2s --health-timeout 2s --health-retries 15
     env:
@@ -102,21 +110,15 @@ jobs:
 
       - run: vendor/bin/pest
 
-  phpredis:
-    # php-ci-static bundles one phpredis release, and the failure messages
-    # this package matches come from phpredis, so each supported release gets
-    # its own run. setup-php is the only installer that pins a PECL version.
-    name: phpredis ${{ matrix.phpredis }} · PHP ${{ matrix.php }}
+  local:
+    # Local development runs phpredis 6.0.1, which php-ci-static does not
+    # bundle. setup-php is the only installer that pins a PECL version.
+    name: phpredis 6.0.1 · PHP 8.3 · Laravel ${{ matrix.laravel }} · Valkey 8.1
     runs-on: depot-ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # phpredis 6.0 does not build against PHP 8.4.
-          - { phpredis: '6.0.2', php: '8.3' }
-          - { phpredis: '6.1.0', php: '8.4' }
-          - { phpredis: '6.2.0', php: '8.4' }
-          - { phpredis: '6.3.0', php: '8.4' }
+        laravel: ['11.*', '12.*']
     services:
       valkey:
         image: valkey/valkey:8.1
@@ -124,17 +126,21 @@ jobs:
         options: --health-cmd "valkey-cli ping" --health-interval 2s --health-timeout 2s --health-retries 15
     env:
       REDIS_TEST_PORT: 6390
+      COMPOSER_NO_SECURITY_BLOCKING: 1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
-          php-version: ${{ matrix.php }}
-          extensions: redis-${{ matrix.phpredis }}, sockets, pcntl
+          php-version: '8.3'
+          extensions: redis-6.0.1, sockets, pcntl
           coverage: none
 
       - run: php -r 'echo "phpredis ", phpversion("redis"), PHP_EOL;'
 
-      - run: composer update --no-interaction --prefer-dist
+      - name: Install dependencies
+        run: |
+          composer require --no-interaction --no-update --dev "laravel/framework:${{ matrix.laravel }}"
+          composer update --no-interaction --prefer-dist --with-all-dependencies
 
       - run: vendor/bin/pest
