@@ -8,7 +8,7 @@ The top `## ` header is always the most recent version (`## vX.Y.Z`, exact), and
 
 ### Changed
 
-- **The package's own lost-connection recovery runs on every Laravel version**, in place of Laravel's own from 13.28. It replays reads only, so on 13.28 and later a plain `SET` is no longer replayed and `command_retries` is not used while `recover_lost_connections` is on. Turn the switch off to keep Laravel's recovery. Every recovered command is now reported, on every version.
+- **The package's own lost-connection recovery runs on every Laravel version**, in place of Laravel's own from 13.28. It replays reads only, so on 13.28 and later a plain `SET` is no longer replayed and `command_retries` is not used while `recover_lost_connections` is on. Turn the switch off to keep Laravel's recovery. The reads it runs again are now reported on 13.28 and later too.
 
 ### Added
 

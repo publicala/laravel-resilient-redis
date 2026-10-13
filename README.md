@@ -61,7 +61,7 @@ Laravel's `command_retries` is not used while the recovery is on, so no write is
 
 ### Reports each recovery
 
-Each recovered connect dispatches `Publicala\ResilientRedis\Events\ConnectRecovered`, and each command that succeeds after a lost connection dispatches `Publicala\ResilientRedis\Events\CommandRecovered`. By default the package also logs one warning per recovery:
+Each recovered connect dispatches `Publicala\ResilientRedis\Events\ConnectRecovered`, and each read the package runs again after a lost connection dispatches `Publicala\ResilientRedis\Events\CommandRecovered`. A pipeline or transaction opened again is not reported, and neither is a recovery inside a recovery listener. By default the package also logs one warning per recovery:
 
 ```text
 redis.connect.recovered {"host":"tls://cache.example.com","port":6379,"database":0,"persistent":true,"attempts":2,"milliseconds":143,"reason":"read_error"}
@@ -120,7 +120,7 @@ A changed switch takes effect once the config cache is rebuilt and long-running 
 - **Redis Cluster** connections use Laravel's stock path.
 - **Outside the recovery:** `scan` and its variants, `subscribe`, calls made on `client()` directly, and a pipeline or transaction opened without a callback (it returns the raw client). `executeRaw()` rebuilds the client but is never replayed.
 - **phpredis retries on its own.** It reconnects an idle socket it finds closed before sending a command (`max_retries`, 10 by default), without going through Laravel's connector, so the package neither retries nor reports those reconnects. A `max_retries` you configure is applied after the connect, which Laravel 11 does not do.
-- **A `SELECT` sent inside a pipeline or transaction whose connection is lost while it runs** is not carried over. phpredis reports no database while its socket is down, so the rebuilt client keeps the last database confirmed before the batch.
+- **A `SELECT` sent inside a pipeline or transaction whose socket drops while it runs** is not carried over. phpredis reports no database once the socket is gone, so the rebuilt client keeps the last database confirmed before the batch.
 - **A failed `SELECT` or `AUTH` that phpredis reports as `false` instead of an exception** still goes unnoticed, as it does in Laravel.
 
 ## Compatibility
