@@ -6,7 +6,7 @@
 
 A managed Redis or Valkey drops connections now and then: a pooled socket goes stale, a TLS handshake gets reset, a failover moves the primary. Laravel retries a read that loses its connection mid-command (on 13.28 and later), but it never retries the **connect** itself, so the request, job or Horizon worker that happened to open the connection fails.
 
-This package retries a phpredis connect that fails fast and transiently, and gives Laravel 11 and 12 the lost-connection recovery that Laravel 13 ships. Install it and every standalone phpredis connection uses it. No code changes.
+This package retries a phpredis connect that fails fast and transiently, and recovers a command that loses its connection on every Laravel version it supports. Install it and every standalone phpredis connection uses it. No code changes.
 
 ```bash
 composer require publicala/laravel-resilient-redis
@@ -42,9 +42,9 @@ No attempt starts 6 seconds or more after the first one began. A resolver that t
 
 A connection with no `timeout` gets one of 2 seconds. Without it, a connect to an unreachable host waits for PHP's `default_socket_timeout`, 60 seconds by default, and holds the worker that long. A `timeout` you set, `0` included, is kept.
 
-### Recovers a lost connection on Laravel 11 and 12
+### Recovers a lost connection
 
-Laravel 13.28 and later rebuild a phpredis client that loses its connection mid-command and run a read once more. On earlier versions the package does the same, more conservatively:
+Laravel 13.28 and later rebuild a phpredis client that loses its connection mid-command and run a read once more. The package does the same on every Laravel version, in place of Laravel's own recovery, and more conservatively:
 
 - **Reads only.** A read (`GET`, `HGETALL`, `ZRANGE` and the like) runs once more on the rebuilt client. A write (`SET`, `INCR`, `EVAL`, a queue push) is never replayed, because the server may have run it before the reply was lost. The client is still rebuilt, so the next command works.
 - **Never inside a WATCH, a MULTI or a pipeline.** The watch dies with the old socket, and a queued command would run outside its batch, so the error is rethrown after the rebuild. When the package cannot tell whether a WATCH is still open (one a pipeline sent, or an UNWATCH a pipeline queued), it treats the watch as open, which only costs the replay.
@@ -53,11 +53,15 @@ Laravel 13.28 and later rebuild a phpredis client that loses its connection mid-
 
 TLS resets that phpredis reports as a PHP warning (`Redis::get(): SSL: Connection reset by peer`) count as a lost connection, as they do on Laravel 13.31 and later.
 
-On Laravel 13.28 and later the package leaves this to the framework.
+A protocol error (`protocol error, got 'X' as reply type byte`) counts as a lost connection too. phpredis raises it when the reply stream goes out of step, typically when the connection breaks mid-reply, and it leaves the socket open. A connect that fails this way is not retried, since a server that does not speak Redis answers the same.
+
+A lost client that still holds its socket is closed before it is replaced. Otherwise phpredis returns a persistent client's socket to its pool, where the next connect would reuse it.
+
+Laravel's `command_retries` is not used while the recovery is on, so no write is replayed. Turn `recover_lost_connections` off to keep Laravel's own recovery instead.
 
 ### Reports each recovery
 
-Each recovered connect dispatches `Publicala\ResilientRedis\Events\ConnectRecovered`, and each read the package's own lost-connection recovery replays dispatches `Publicala\ResilientRedis\Events\CommandRecovered`. On Laravel 13.28 and later the framework replays reads itself, and the package reports only the connects. By default the package also logs one warning per recovery:
+Each recovered connect dispatches `Publicala\ResilientRedis\Events\ConnectRecovered`, and each read the package runs again after a lost connection dispatches `Publicala\ResilientRedis\Events\CommandRecovered`. A pipeline or transaction opened again is not reported, and neither is a recovery inside a recovery listener. By default the package also logs one warning per recovery:
 
 ```text
 redis.connect.recovered {"host":"tls://cache.example.com","port":6379,"database":0,"persistent":true,"attempts":2,"milliseconds":143,"reason":"read_error"}
@@ -95,7 +99,7 @@ The package's own switches live in `config/resilient-redis.php`. Each one reads 
 | Key | Environment variable | Default | Effect |
 | --- | --- | --- | --- |
 | `enabled` | `RESILIENT_REDIS_ENABLED` | `true` | When false, phpredis uses Laravel's stock connector, as if the package were not installed |
-| `recover_lost_connections` | `RESILIENT_REDIS_RECOVER_LOST_CONNECTIONS` | `true` | The lost-connection recovery on Laravel versions before 13.28 |
+| `recover_lost_connections` | `RESILIENT_REDIS_RECOVER_LOST_CONNECTIONS` | `true` | The lost-connection recovery. When false, phpredis connections keep Laravel's own handling |
 | `log_recoveries` | `RESILIENT_REDIS_LOG_RECOVERIES` | `true` | One warning per recovery |
 
 ```bash
@@ -115,9 +119,8 @@ A changed switch takes effect once the config cache is rebuilt and long-running 
 - **phpredis only.** Predis connections are left alone.
 - **Redis Cluster** connections use Laravel's stock path.
 - **Outside the recovery:** `scan` and its variants, `subscribe`, calls made on `client()` directly, and a pipeline or transaction opened without a callback (it returns the raw client). `executeRaw()` rebuilds the client but is never replayed.
-- **Laravel 13.28 to 13.32** recover reads but not pipelines and transactions, and 13.28 to 13.30 do not treat a TLS reset warning as a lost connection. Upgrade to 13.33 or later for both.
 - **phpredis retries on its own.** It reconnects an idle socket it finds closed before sending a command (`max_retries`, 10 by default), without going through Laravel's connector, so the package neither retries nor reports those reconnects. A `max_retries` you configure is applied after the connect, which Laravel 11 does not do.
-- **A `SELECT` sent inside a pipeline or transaction whose connection is lost while it runs** is not carried over. phpredis reports no database while its socket is down, so the rebuilt client keeps the last database confirmed before the batch.
+- **A `SELECT` sent inside a pipeline or transaction whose socket drops while it runs** is not carried over. phpredis reports no database once the socket is gone, so the rebuilt client keeps the last database confirmed before the batch.
 - **A failed `SELECT` or `AUTH` that phpredis reports as `false` instead of an exception** still goes unnoticed, as it does in Laravel.
 
 ## Compatibility

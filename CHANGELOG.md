@@ -4,6 +4,16 @@ All notable changes to `publicala/laravel-resilient-redis`.
 
 The top `## ` header is always the most recent version (`## vX.Y.Z`, exact), and that header is the source of truth the release workflow reads. Adding a new top block to this file is what cuts a release.
 
+## v3.0.0
+
+### Changed
+
+- **The package's own lost-connection recovery runs on every Laravel version**, in place of Laravel's own from 13.28. It replays reads only, so on 13.28 and later a plain `SET` is no longer replayed and `command_retries` is not used while `recover_lost_connections` is on. Turn the switch off to keep Laravel's recovery. The reads it runs again are now reported on 13.28 and later too.
+
+### Added
+
+- **A protocol error counts as a lost connection.** phpredis raises `protocol error, got 'X' as reply type byte` when a reply stream goes out of step, typically after the connection broke mid-reply, and leaves the socket open. The client is rebuilt and a read runs once more. A connect that fails this way is not retried.
+
 ## v2.0.0
 
 ### Changed

@@ -30,11 +30,12 @@ it('never retries a connect failure that is slow, deterministic or not from phpr
     'a server that does not speak TLS' => [new ErrorException("Redis::connect(): SSL operation failed with code 1. OpenSSL Error messages:\nerror:0A00010B:SSL routines::wrong version number")],
     'a host that does not resolve' => [new RedisException('php_network_getaddresses: getaddrinfo for cache.example.com failed: Name or service not known')],
     'a server loading its dataset' => [new RedisException('LOADING Valkey is loading the dataset in memory')],
+    'a reply stream out of step' => [new RedisException("protocol error, got 'X' as reply type byte\n")],
     'a warning from outside phpredis' => [new ErrorException('fsockopen(): Connection reset by peer')],
     'an exception from outside phpredis' => [new RuntimeException('Connection refused')],
 ]);
 
-it('names a command failure Laravel treats as a lost connection', function (Throwable $e, string $reason): void {
+it('names a command failure that means a lost connection', function (Throwable $e, string $reason): void {
     expect(Failure::lostConnectionReason($e))->toBe($reason);
 })->with([
     'a lost connection' => [new RedisException('Connection lost'), 'connection_lost'],
@@ -45,6 +46,8 @@ it('names a command failure Laravel treats as a lost connection', function (Thro
     'a server that went away' => [new RedisException('Redis server went away'), 'server_went_away'],
     'a primary demoted to replica' => [new RedisException("READONLY You can't write against a read only replica."), 'readonly_replica'],
     'a socket error' => [new RedisException('socket error on read socket'), 'socket_error'],
+    'a reply stream out of step' => [new RedisException("protocol error, got 'X' as reply type byte\n"), 'protocol_error'],
+    'a reply stream out of step, from the multi-bulk reader' => [new RedisException("protocol error, got 'X' as reply-type byte\n"), 'protocol_error'],
 ]);
 
 it('leaves a command failure that is not a lost connection alone', function (Throwable $e): void {

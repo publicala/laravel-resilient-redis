@@ -13,10 +13,11 @@ use Redis;
 use Throwable;
 
 /**
- * Recovers from a lost connection on Laravel versions that do not: the
- * client is rebuilt through the connector, and a read runs once more on
- * the new one. Adapted from Laravel 13's PhpRedisConnection (MIT
- * License, Copyright (c) Taylor Otwell), replaying reads only.
+ * Recovers from a lost connection on every Laravel version, in place of
+ * Laravel's own recovery from 13.28: the client is rebuilt through the
+ * connector, and a read runs once more on the new one. Adapted from
+ * Laravel 13's PhpRedisConnection (MIT License, Copyright (c) Taylor
+ * Otwell), replaying reads only.
  */
 final class ResilientPhpRedisConnection extends PhpRedisConnection
 {
@@ -137,6 +138,15 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
         $transaction = $this->openBatch(fn (): Redis|false => $this->client()->multi());
 
         return $callback === null || $transaction === false ? $transaction : $this->executeBatch($transaction, $callback, transaction: true);
+    }
+
+    public function disconnect(): void
+    {
+        parent::disconnect();
+
+        // Closing the socket ended any WATCH it held.
+        $this->watching = false;
+        $this->watchQueued = false;
     }
 
     /**
@@ -322,8 +332,8 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
         $previous = $this->client;
         $options = collect(self::RUNTIME_OPTIONS)->mapWithKeys(fn (int $option): array => [$option => $previous->getOption($option)]);
 
-        // Closing a client that still holds its socket (a READONLY reply after a failover) lets a persistent one release
-        // it to the pool. phpredis reconnects a failed client just to close it, so a failed one is left alone.
+        // A client that still holds its socket (a READONLY reply, a reply stream out of step) is closed: phpredis returns the
+        // socket of a persistent client it destroys to the pool. It reconnects a failed client just to close it, so one is left alone.
         if ($previous->isConnected()) {
             rescue(fn (): bool => $previous->close(), null, false);
         }

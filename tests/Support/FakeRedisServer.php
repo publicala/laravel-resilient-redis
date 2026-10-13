@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Publicala\ResilientRedis\Tests\Support;
 
+use Illuminate\Support\Sleep;
 use Illuminate\Support\Str;
 use RuntimeException;
 
@@ -107,6 +108,24 @@ final class FakeRedisServer
     public function commands(): array
     {
         return array_map(fn (string $event): string => Str::after($event, 'command '), $this->events('command'));
+    }
+
+    /**
+     * Whether the client closed the given connection (1 for the first one accepted), waiting up to a second for the server to notice.
+     */
+    public function hungUp(int $connection): bool
+    {
+        $deadline = microtime(true) + 1.0;
+
+        do {
+            if (in_array("hangup {$connection}", $this->events('hangup'), true)) {
+                return true;
+            }
+
+            Sleep::usleep(10_000);
+        } while (microtime(true) < $deadline);
+
+        return false;
     }
 
     public function stop(): void

@@ -28,8 +28,7 @@ final class ResilientRedisServiceProvider extends ServiceProvider
                 return;
             }
 
-            $recoverLostConnections = $config->get('resilient-redis.recover_lost_connections', true)
-                && ! ResilientPhpRedisConnector::frameworkRecoversLostConnections();
+            $recoverLostConnections = (bool) $config->get('resilient-redis.recover_lost_connections', true);
             $events = $this->app->make(RecoveryEvents::class);
 
             $redis->extend('phpredis', fn (): ResilientPhpRedisConnector => new ResilientPhpRedisConnector(

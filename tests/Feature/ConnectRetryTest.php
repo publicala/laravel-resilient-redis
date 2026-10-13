@@ -124,6 +124,17 @@ it('does not retry a reply that stalled for a second', function (): void {
     Sleep::assertNeverSlept();
 });
 
+it('does not retry a protocol error during the connect, since a server that is not Redis would answer the same', function (): void {
+    $server = FakeRedisServer::start(['garbage-after:0']);
+    $reported = [];
+
+    expect(fn (): PhpRedisConnection => connectorReportingTo($reported)->connect($server->config(), []))
+        ->toThrow(RedisException::class, 'protocol error');
+
+    expect($server->acceptedConnections())->toBe(1);
+    Sleep::assertNeverSlept();
+});
+
 it('does not retry a server that rejects the credentials', function (): void {
     $server = FakeRedisServer::start(['error:WRONGPASS invalid username-password pair or user is disabled.']);
     $reported = [];

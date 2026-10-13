@@ -22,9 +22,10 @@ return [
     | Recover Lost Connections
     |--------------------------------------------------------------------------
     |
-    | On Laravel versions that do not recover a lost connection themselves
-    | (before 13.28), rebuild the client after a command loses the server
-    | and run a read once more. Newer versions keep their own handling.
+    | Rebuild the client after a command loses the server, and run a read
+    | once more, on every Laravel version. From 13.28 this replaces
+    | Laravel's own recovery. When false, phpredis connections keep
+    | Laravel's own handling.
     |
     */
 

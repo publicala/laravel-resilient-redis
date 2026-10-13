@@ -64,6 +64,33 @@ it('runs a read once more on a rebuilt client after a READONLY reply, which leav
         ->and($reported[0]->reason)->toBe('readonly_replica');
 });
 
+it('runs a read once more on a rebuilt client after a protocol error, and closes the socket that went out of step', function (bool $persistent): void {
+    $server = FakeRedisServer::start(['garbage-after:2', 'serve']);
+    $reported = [];
+    $connection = recoveringConnection($server, $reported, ['persistent' => $persistent, 'persistent_id' => Str::random()]);
+    $connection->set('greeting', 'hello');
+
+    expect($connection->get('greeting'))->toBe('hello')
+        ->and($server->commands())->toBe(['SELECT 0', 'SET greeting hello', 'GET greeting', 'SELECT 0', 'GET greeting'])
+        ->and($server->hungUp(1))->toBeTrue()
+        ->and($reported)->toHaveCount(1)
+        ->and($reported[0]->reason)->toBe('protocol_error');
+})->with([
+    'connect' => false,
+    'pconnect' => true,
+]);
+
+it('gives up when the replayed read hits a protocol error too', function (): void {
+    $server = FakeRedisServer::start(['garbage-after:1']);
+    $reported = [];
+    $connection = recoveringConnection($server, $reported);
+
+    expect(fn () => $connection->get('greeting'))->toThrow(RedisException::class, 'protocol error');
+
+    expect($server->commands())->toBe(['SELECT 0', 'GET greeting', 'SELECT 0', 'GET greeting', 'SELECT 0'])
+        ->and($reported)->toBeEmpty();
+});
+
 it('rebuilds the client but never replays a write, because the server may already have run it', function (Closure $write, string $sent): void {
     $server = FakeRedisServer::start(['serve:1', 'serve']);
     $reported = [];
@@ -396,6 +423,19 @@ it('counts a WATCH a pipeline sent through the connection once the pipeline runs
     expect(fn () => $connection->get('balance'))->toThrowLostConnection();
 
     expect($server->commands())->toBe(['SELECT 0', 'WATCH balance', 'GET balance', 'SELECT 0']);
+});
+
+it('runs a read once more after a disconnect ended the WATCH', function (): void {
+    $server = FakeRedisServer::start(['serve', 'close-on-first-read', 'serve']);
+    $reported = [];
+    $connection = recoveringConnection($server, $reported);
+    $connection->set('greeting', 'hello');
+    $connection->watch('greeting');
+    $connection->disconnect();
+
+    expect($connection->get('greeting'))->toBe('hello')
+        ->and($server->acceptedConnections())->toBe(3)
+        ->and($reported)->toHaveCount(1);
 });
 
 it('treats a WATCH sent by a pipeline that failed as open', function (): void {

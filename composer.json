@@ -1,6 +1,6 @@
 {
     "name": "publicala/laravel-resilient-redis",
-    "description": "Retry transient phpredis connect failures in Laravel, and give Laravel 11 and 12 the lost-connection handling Laravel 13 ships.",
+    "description": "Retry transient phpredis connect failures in Laravel, and recover commands that lose their connection on every Laravel version.",
     "keywords": [
         "laravel",
         "redis",

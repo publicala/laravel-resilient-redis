@@ -29,7 +29,7 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
     public const float DEFAULT_TIMEOUT = 2.0;
 
     /**
-     * @param  bool  $recoverLostConnections  Return connections that rebuild a lost client and retry reads, for Laravel versions without that handling.
+     * @param  bool  $recoverLostConnections  Return connections that rebuild a lost client and retry reads, in place of Laravel's own recovery.
      * @param  (Closure(object): void)|null  $report
      * @param  (Closure(): float)|null  $clock  Milliseconds on a monotonic clock.
      */
@@ -40,7 +40,8 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
     ) {}
 
     /**
-     * Whether this Laravel version rebuilds a lost connection and retries reads on its own (13.28 and later).
+     * Whether this Laravel version rebuilds a lost connection and retries reads on its own (13.28 and later),
+     * which the package's recovery replaces while it is on.
      */
     public static function frameworkRecoversLostConnections(): bool
     {
