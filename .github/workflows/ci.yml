@@ -145,5 +145,6 @@ jobs:
           || (github.event_name == 'push' && needs.changes.outputs.changelog_or_workflow == 'true'))
     permissions:
       contents: write
+      checks: read
     uses: ./.github/workflows/release.yml
     secrets: inherit
