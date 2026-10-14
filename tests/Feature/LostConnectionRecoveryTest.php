@@ -452,6 +452,23 @@ it('treats a WATCH sent by a pipeline that failed as open', function (): void {
     expect($server->commands())->toBe(['SELECT 0', 'WATCH balance', 'SET balance 1', 'GET balance', 'SELECT 0']);
 });
 
+it('keeps the watch open when a transaction inside a pipeline fails, since its DISCARD never reaches the server', function (): void {
+    $server = FakeRedisServer::start(['serve:2', 'serve']);
+    $connection = recoveringConnection($server);
+    $connection->watch('balance');
+
+    $callback = function () use ($connection): void {
+        $connection->transaction(function (): void {
+            throw new RuntimeException('The order is no longer valid.');
+        });
+    };
+
+    expect(fn (): Redis|array|false => $connection->pipeline($callback))->toThrow(RuntimeException::class, 'The order is no longer valid.');
+    expect(fn () => $connection->get('balance'))->toThrowLostConnection();
+
+    expect($server->commands())->toBe(['SELECT 0', 'WATCH balance', 'GET balance', 'SELECT 0']);
+});
+
 it('keeps the watch open when a pipeline queued an UNWATCH the server refused', function (): void {
     $server = FakeRedisServer::start(['serve-unknown:3:UNWATCH', 'serve']);
     $connection = recoveringConnection($server);
