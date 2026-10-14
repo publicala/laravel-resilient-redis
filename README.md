@@ -121,6 +121,7 @@ A changed switch takes effect once the config cache is rebuilt and long-running 
 - **Outside the recovery:** `scan` and its variants, `subscribe`, calls made on `client()` directly, and a pipeline or transaction opened without a callback (it returns the raw client). `executeRaw()` rebuilds the client but is never replayed.
 - **phpredis retries on its own.** It reconnects an idle socket it finds closed before sending a command (`max_retries`, 10 by default), without going through Laravel's connector, so the package neither retries nor reports those reconnects. A `max_retries` you configure is applied after the connect, which Laravel 11 does not do.
 - **A `SELECT` sent inside a pipeline or transaction whose socket drops while it runs** is not carried over. phpredis reports no database once the socket is gone, so the rebuilt client keeps the last database confirmed before the batch.
+- **A `SELECT` inside a transaction that runs inside a pipeline** is not tracked by phpredis, which keeps reporting the database from before the pipeline. A rebuilt client returns to that database, as phpredis's own reconnect does.
 - **A failed `SELECT` or `AUTH` that phpredis reports as `false` instead of an exception** still goes unnoticed, as it does in Laravel.
 
 ## Compatibility
