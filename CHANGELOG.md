@@ -4,6 +4,13 @@ All notable changes to `publicala/laravel-resilient-redis`.
 
 The top `## ` header is always the most recent version (`## vX.Y.Z`, exact), and that header is the source of truth the release workflow reads. Adding a new top block to this file is what cuts a release.
 
+## v3.0.2
+
+### Fixed
+
+- **A transaction inside a pipeline runs.** Laravel's Redis queue pushes a bulk of jobs that way (`Queue::bulk()`, so every `Bus::batch()`), and phpredis returns the client from that inner `EXEC`, which threw a `TypeError`.
+- **A transaction that fails inside a pipeline keeps the WATCH open.** Its `DISCARD` only drops what the client queued and never reaches the server, so a later read is not replayed.
+
 ## v3.0.1
 
 ### Fixed

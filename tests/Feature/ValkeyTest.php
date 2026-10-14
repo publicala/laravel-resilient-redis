@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Redis;
 
 beforeEach(function (): void {
@@ -23,6 +24,21 @@ it('runs commands, pipelines, transactions and scripts against a real server', f
         ->and($piped)->toBe(['hello'])
         ->and($transacted)->toBe([1])
         ->and($redis->eval('return redis.call("get", KEYS[1])', 1, 'greeting'))->toBe('hello');
+});
+
+it('runs a transaction inside a pipeline, as the Redis queue does to push a bulk of jobs', function (): void {
+    $redis = Redis::connection();
+
+    $results = $redis->pipeline(fn () => $redis->transaction(function ($transaction): void {
+        $transaction->incr('visits');
+        $transaction->set('greeting', 'hello');
+    }));
+
+    Queue::connection('redis')->bulk(['SendInvoice', 'SendReceipt'], ['account' => 'Acme Books']);
+
+    expect($results)->toBe([[1, true]])
+        ->and($redis->get('greeting'))->toBe('hello')
+        ->and(Queue::connection('redis')->size())->toBe(2);
 });
 
 it('passes an int where phpredis types a string, as Laravel does', function (): void {

@@ -219,11 +219,11 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
     /**
      * Run the callback against the batch and execute it, never twice.
      *
-     * @return array<int, mixed>|false
+     * @return Redis|array<int, mixed>|false
      *
      * @throws Throwable
      */
-    private function executeBatch(Redis $batch, callable $callback, bool $transaction): array|false
+    private function executeBatch(Redis $batch, callable $callback, bool $transaction): Redis|array|false
     {
         try {
             $callback($batch);
@@ -242,9 +242,11 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
 
             // phpredis reconnects a failed client to send DISCARD, so a client whose socket is gone is left alone.
             if ($batch->isConnected() && $batch->getMode() !== Redis::ATOMIC) {
+                // Inside a pipeline, DISCARD only drops what the client queued, so a WATCH the server holds stays open.
+                $sendsDiscard = $batch->getMode() === Redis::MULTI;
                 $discarded = rescue(fn (): Redis|bool => $batch->discard(), false, false) === true;
 
-                if ($discarded && $transaction && $batch === $this->client) {
+                if ($discarded && $transaction && $sendsDiscard && $batch === $this->client) {
                     $this->watching = false;
                 }
             }
@@ -255,6 +257,11 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
             }
 
             throw $throwable;
+        }
+
+        // A transaction inside a pipeline only queued its EXEC. The pipeline settles the batch once it runs.
+        if ($result instanceof Redis) {
+            return $result;
         }
 
         if ($batch === $this->client) {
