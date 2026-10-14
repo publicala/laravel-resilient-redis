@@ -18,9 +18,11 @@ pre-commit:
       run: ./vendor/bin/pint {staged_files}
       glob: "*.php"
       stage_fixed: true
-      # A standalone script parsing bytes, which Pint would move to mb_* functions.
-      # Pint ignores its notPath for files passed by name.
+      # Pint ignores its notPath for files passed by name, so its skips repeat here.
       exclude:
+        # Calls phpredis in coercive mode, and Pint would declare strict types.
+        - src/CommandForwarder.php
+        # A standalone script parsing bytes, which Pint would move to mb_* functions.
         - tests/Support/fake-redis-server.php
 
 # No pre-push hook: PHPStan, type coverage, and the test suite run in CI behind

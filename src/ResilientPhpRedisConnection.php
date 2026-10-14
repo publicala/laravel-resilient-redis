@@ -89,7 +89,7 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
             $startedAt = microtime(true);
 
             try {
-                $result = $this->client->{$method}(...$parameters);
+                $result = CommandForwarder::forward($this->client, $method, $parameters);
             } catch (Throwable $e) {
                 $this->dispatchCommandFailed($method, $parameters, $e);
 
