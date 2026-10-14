@@ -1,6 +1,7 @@
 {
     "preset": "laravel",
     "notPath": [
+        "src/CommandForwarder.php",
         "tests/Support/fake-redis-server.php",
         "tests/TestCase.php"
     ],

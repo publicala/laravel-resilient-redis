@@ -25,6 +25,15 @@ it('runs commands, pipelines, transactions and scripts against a real server', f
         ->and($redis->eval('return redis.call("get", KEYS[1])', 1, 'greeting'))->toBe('hello');
 });
 
+it('passes an int where phpredis types a string, as Laravel does', function (): void {
+    $redis = Redis::connection();
+    $redis->zadd('failed_jobs', -200, 'old', -50, 'recent');
+
+    expect($redis->zremrangebyscore('failed_jobs', -100, '+inf'))->toBe(1)
+        ->and($redis->zcount('failed_jobs', -300, 0))->toBe(1)
+        ->and($redis->zrangebyscore('failed_jobs', -300, 0))->toBe(['old']);
+});
+
 it('serves the cache store and its locks', function (): void {
     Cache::put('profile', ['name' => 'Acme Books'], 60);
 

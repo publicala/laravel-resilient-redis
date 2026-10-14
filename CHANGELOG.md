@@ -4,6 +4,12 @@ All notable changes to `publicala/laravel-resilient-redis`.
 
 The top `## ` header is always the most recent version (`## vX.Y.Z`, exact), and that header is the source of truth the release workflow reads. Adding a new top block to this file is what cuts a release.
 
+## v3.0.1
+
+### Fixed
+
+- **A command accepts an int where phpredis types a string**, as it does on Laravel's own connection. The package called phpredis from a file with strict types, so Horizon trimming failed jobs (`zremrangebyscore` with an int score) threw a `TypeError` on every supervisor loop.
+
 ## v3.0.0
 
 ### Changed
