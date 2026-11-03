@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Publicala\ResilientRedis\Tests\Support;
 
+use Illuminate\Filesystem\Filesystem;
 use Illuminate\Support\Sleep;
 use Illuminate\Support\Str;
 use RuntimeException;
@@ -135,7 +136,9 @@ final class FakeRedisServer
             proc_close($this->process);
         }
 
-        @unlink($this->log);
+        // An instance, not the File facade: stop() also runs from __destruct,
+        // which can fire after the test application is torn down.
+        (new Filesystem)->delete($this->log);
     }
 
     /**
