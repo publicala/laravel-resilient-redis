@@ -8,13 +8,13 @@ The title carries more weight than anything below it. Imperative, complete sente
 
 Closes:
 
-<!-- What this PR resolves and marks done: Linear issue, Nightwatch issue, Sentry issue, GitHub issue. One per line. A GitHub issue closes on merge only when the keyword sits on the reference itself, so write that line as `- Closes #123`. The heading alone does not close anything. Delete both lines when there is nothing to close. -->
+<!-- What this PR resolves and marks done: Linear issue, Nightwatch issue, Sentry issue, GitHub issue. One per line. Link anything outside GitHub by its full URL (Linear, Nightwatch, Sentry, Slack): GitHub turns a bare `#123` into this repository's issue or PR. A GitHub issue closes on merge only when the keyword sits on the reference itself, so write that line as `- Closes #123`. The heading alone does not close anything. Delete both lines when there is nothing to close. -->
 
 -
 
 Related:
 
-<!-- Context this PR does not resolve: Slack thread, design doc, partially addressed Sentry or Nightwatch issue. Delete both lines when there is nothing to link. -->
+<!-- Context this PR does not resolve: Slack thread, design doc, partially addressed Sentry or Nightwatch issue. Full URLs for anything outside GitHub. Delete both lines when there is nothing to link. -->
 
 -
 
