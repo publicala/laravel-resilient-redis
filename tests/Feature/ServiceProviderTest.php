@@ -110,7 +110,7 @@ it('reports a listener that fails instead of failing the Redis call that recover
 
         return false;
     });
-    resolve(Dispatcher::class)->listen(ConnectRecovered::class, fn () => throw new RuntimeException('The metrics backend is down.'));
+    resolve(Dispatcher::class)->listen(ConnectRecovered::class, fn (): never => throw new RuntimeException('The metrics backend is down.'));
 
     resolve(RecoveryEvents::class)->dispatch(new ConnectRecovered('127.0.0.1', 6379, 0, false, 2, 140, 'read_error'));
 
@@ -119,7 +119,7 @@ it('reports a listener that fails instead of failing the Redis call that recover
 
 it('drops the report when reporting the failing listener fails too', function (): void {
     $listened = false;
-    resolve(ExceptionHandler::class)->reportable(fn (Throwable $e) => throw new RuntimeException('The log sink is down.'));
+    resolve(ExceptionHandler::class)->reportable(fn (Throwable $e): never => throw new RuntimeException('The log sink is down.'));
     resolve(Dispatcher::class)->listen(ConnectRecovered::class, function () use (&$listened): never {
         $listened = true;
 
