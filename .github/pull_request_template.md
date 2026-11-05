@@ -9,11 +9,11 @@ The title carries more weight than anything below it. Imperative, complete sente
 <!--
 Links. One line per relation. Delete the lines that do not apply.
 Name the tool and the project in every link text, also for this repository: "GitHub repo#123", "Linear DEV-123", "Nightwatch app #123", "Sentry project PROJECT-1A2", "Slack #channel thread".
-Write every link as a Markdown link with the full URL: [GitHub repo#123](https://github.com/publicala/repo/pull/123). GitHub turns a bare `#123` into this repository's issue or PR.
-- Closes: what this PR resolves and marks done (Linear, Nightwatch, Sentry). A GitHub issue closes on merge only with GitHub's own syntax on its own line: `- Closes publicala/repo#123`.
+Write every link as a Markdown link with the full URL: [GitHub repo#123](https://github.com/publicala/repo/pull/123). GitHub turns a bare `#123` into this repository's issue or PR. A GitHub closing reference is the one exception: it stays bare.
+- Closes: what this PR resolves and marks done (Linear, Nightwatch, Sentry). A GitHub issue closes on merge only with GitHub's own syntax on its own line, and only when the PR targets the default branch: `- Closes publicala/repo#123`.
 - Related: context this PR does not resolve (Slack thread, design doc, a partly addressed issue).
 - Merge first: a PR in another repository that must merge before this one.
-- Stacked on: the parent PR of a stack. The base branch is the parent's branch. Retarget to the default branch after the parent merges.
+- Stacked on: the parent PR of a stack. The base branch is the parent's branch. Retarget to the default branch only after every PR below this one in the stack has merged there.
 -->
 
 - Closes:
