@@ -137,7 +137,7 @@ it('rethrows the command failure when the rebuild fails, since a lost write repl
     $client->connect('127.0.0.1', $server->port, 1.0);
     $client->select(0);
 
-    $connection = new ResilientPhpRedisConnection($client, fn () => throw new RuntimeException('Valkey is unreachable.'), []);
+    $connection = new ResilientPhpRedisConnection($client, fn (): never => throw new RuntimeException('Valkey is unreachable.'), []);
 
     expect(fn () => $connection->set('job', 'payload'))->toThrowLostConnection();
 });
