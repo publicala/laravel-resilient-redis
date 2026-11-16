@@ -4,6 +4,12 @@ All notable changes to `publicala/laravel-resilient-redis`.
 
 The top `## ` header is always the most recent version (`## vX.Y.Z`, exact), and that header is the source of truth the release workflow reads. Adding a new top block to this file is what cuts a release.
 
+## v3.0.3
+
+### Changed
+
+- **PHPStan below 2.3.6 in the development toolchain.** PHPStan 2.3.6 removed `AnalyserResult::getCollectedData()`, which `pest-plugin-type-coverage` 5.1.0 calls, so the type coverage step errors before it measures. The constraint is a development dependency, so applications that install the package resolve nothing new. Lift it once the plugin supports 2.3.6.
+
 ## v3.0.2
 
 ### Fixed
