@@ -155,7 +155,7 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
         parent::establishConnection($client, $config);
     }
 
-    private static function poolsPersistentSockets(): bool
+    private function poolsPersistentSockets(): bool
     {
         return (int) ini_get('redis.pconnect.pooling_enabled') === 1;
     }
@@ -172,7 +172,7 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
 
         // With phpredis pooling off, PHP shares one persistent stream between the clients that name the same persistent_id,
         // so closing it would cut off a client that still uses it.
-        if (! $client instanceof Redis || ! $client->isConnected() || ($persistent && ! self::poolsPersistentSockets())) {
+        if (! $client instanceof Redis || ! $client->isConnected() || ($persistent && ! $this->poolsPersistentSockets())) {
             return;
         }
 
