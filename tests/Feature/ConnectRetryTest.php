@@ -198,9 +198,9 @@ it('does not retry a fresh persistent connection whose server stalls on AUTH or 
     try {
         connectorReportingTo($reported)->connect($server->config(['persistent' => true, 'persistent_id' => Str::random(), 'read_timeout' => 1.05, ...$config]), []);
         $this->fail('The connect did not fail.');
-    } catch (RedisException $e) {
-        expect($e->getMessage())->toContain('read error on connection')
-            ->and($e->getTrace()[0]['function'])->toBe($call);
+    } catch (RedisException $redisException) {
+        expect($redisException->getMessage())->toContain('read error on connection')
+            ->and($redisException->getTrace()[0]['function'])->toBe($call);
     }
 
     expect($server->acceptedConnections())->toBe(1)
