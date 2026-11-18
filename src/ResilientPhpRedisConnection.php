@@ -123,6 +123,8 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
 
                 // The server ends a transaction on EXEC and DISCARD whatever they answer, an error reply phpredis throws included.
                 if (mb_strtolower($method) === 'rawcommand' && $mode === Redis::ATOMIC && $this->endsRawTransaction($parameters)) {
+                    // Whether a queued SELECT ran is unknown, and asking would make phpredis reconnect a failed client.
+                    $this->rawSelectQueued = false;
                     $this->inRawTransaction = false;
                     $this->settleBatch(closesWatch: true);
                 }
@@ -372,8 +374,15 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
             return;
         }
 
-        // Inside a raw transaction a command only queues, and the server refuses what it cannot queue with false.
-        if ($result === false || $this->inRawTransaction) {
+        // The server refuses what it cannot run or queue with false.
+        if ($result === false) {
+            return;
+        }
+
+        // Inside a raw transaction a command only queues, and a SELECT takes effect once the raw EXEC runs.
+        if ($this->inRawTransaction) {
+            $this->rawSelectQueued = $this->rawSelectQueued || $command === 'select';
+
             return;
         }
 
@@ -426,7 +435,8 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
     private function followQueuedRawSelect(): void
     {
         // A transaction inside a pipeline settles while the pipeline still queues, and the pipeline settles after it.
-        if ($this->client->getMode() !== Redis::ATOMIC) {
+        // A raw transaction would queue the question, so the raw EXEC or DISCARD that ends it follows the SELECT.
+        if ($this->client->getMode() !== Redis::ATOMIC || $this->inRawTransaction) {
             return;
         }
 

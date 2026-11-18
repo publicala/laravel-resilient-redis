@@ -115,3 +115,46 @@ it('keeps the database a raw SELECT in a pipeline chose after the server kills t
         $redis->flushdb();
     }
 });
+
+it('keeps the database a raw SELECT inside a raw transaction chose after the server kills the connection', function (): void {
+    $redis = Redis::connection();
+    $redis->set('greeting', 'from database 0');
+    $redis->executeRaw(['MULTI']);
+    $redis->executeRaw(['SELECT', '3']);
+    $redis->executeRaw(['EXEC']);
+    $redis->set('greeting', 'from database 3');
+
+    $id = $redis->executeRaw(['CLIENT', 'ID']);
+    Redis::connection('admin')->executeRaw(['CLIENT', 'KILL', 'ID', (string) $id]);
+
+    try {
+        expect($redis->get('greeting'))->toBe('from database 3');
+    } finally {
+        $redis->select(3);
+        $redis->flushdb();
+    }
+});
+
+it('waits for the raw EXEC before asking which database a raw SELECT a pipeline queued before a raw MULTI chose', function (): void {
+    $redis = Redis::connection();
+    $redis->set('greeting', 'from database 0');
+    $redis->pipeline(function () use ($redis): void {
+        $redis->executeRaw(['SELECT', '3']);
+        $redis->executeRaw(['MULTI']);
+    });
+    $redis->executeRaw(['PING']);
+
+    try {
+        // CLIENT INFO sent inside the transaction would have queued, and EXEC would answer one reply more.
+        expect($redis->executeRaw(['EXEC']))->toBe([true]);
+
+        $redis->set('greeting', 'from database 3');
+        $id = $redis->executeRaw(['CLIENT', 'ID']);
+        Redis::connection('admin')->executeRaw(['CLIENT', 'KILL', 'ID', (string) $id]);
+
+        expect($redis->get('greeting'))->toBe('from database 3');
+    } finally {
+        $redis->select(3);
+        $redis->flushdb();
+    }
+});
