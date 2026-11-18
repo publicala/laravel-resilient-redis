@@ -27,15 +27,17 @@ function connectorReportingTo(array &$reported, ?Closure $clock = null, bool $re
 }
 
 /**
- * A clock that moves on by a stall's length every time the connector reads it, so a short
- * read_timeout fails an attempt that the retry policy measures as slow.
+ * A clock that moves on by a stall's length on each of its first readings and by a millisecond after them,
+ * so a short read_timeout fails an attempt that the retry policy measures as slow. The connector reads it
+ * three times up to the first attempt's failure.
  */
-function stallingClock(): Closure
+function stallingClock(int $stalledReadings = PHP_INT_MAX): Closure
 {
     $now = 0.0;
+    $readings = 0;
 
-    return function () use (&$now): float {
-        return $now += 1100.0;
+    return function () use (&$now, &$readings, $stalledReadings): float {
+        return $now += ++$readings <= $stalledReadings ? 1100.0 : 1.0;
     };
 }
 
@@ -175,6 +177,56 @@ it('retries a silent pooled socket only once, even when the retry takes a second
     expect(array_values(array_filter($server->commands(), fn (string $command): bool => str_starts_with($command, 'ECHO'))))->toHaveCount(2)
         ->and($reported)->toBeEmpty();
     Sleep::assertSleptTimes(1);
+});
+
+it('retries a silent pooled socket only once, so a server that stopped answering fails on the retry\'s SELECT', function (): void {
+    // Connection 2 is the replacement phpredis opens inside the failed pconnect(), and connection 3 is the retry's own.
+    $server = FakeRedisServer::start(['serve-then-stall:2', 'stall', 'stall']);
+    $reported = [];
+    $config = $server->config(['persistent' => true, 'persistent_id' => Str::random(), 'read_timeout' => 0.1]);
+
+    connectorReportingTo($reported)->connect($config, [])->get('key');
+
+    try {
+        connectorReportingTo($reported, stallingClock())->connect($config, []);
+        $this->fail('The connect did not fail.');
+    } catch (RedisException $redisException) {
+        expect($redisException->getMessage())->toContain('read error on connection')
+            ->and($redisException->getTrace()[0]['function'])->toBe('select');
+    }
+
+    expect($server->acceptedConnections())->toBe(3)
+        ->and($reported)->toBeEmpty();
+    Sleep::assertSleptTimes(1);
+});
+
+it('recovers a silent pooled socket on a server that stopped answering when the connection sends no AUTH or SELECT, and the next command stalls', function (): void {
+    $server = FakeRedisServer::start(['serve-then-stall:1', 'stall', 'stall']);
+    $reported = [];
+    $config = [...$server->config(['persistent' => true, 'persistent_id' => Str::random(), 'read_timeout' => 0.1]), 'database' => null];
+
+    connectorReportingTo($reported)->connect($config, [])->get('key');
+
+    $connection = connectorReportingTo($reported, stallingClock())->connect($config, []);
+
+    expect($reported)->toHaveCount(1)
+        ->and($reported[0]->reason)->toBe('stale_pooled_socket')
+        ->and(fn (): mixed => $connection->get('key'))->toThrow(RedisException::class, 'read error on connection');
+});
+
+it('names the later failure when a recovery took a third attempt', function (): void {
+    // The retry's own socket is closed after its SELECT arrives, and the third attempt connects.
+    $server = FakeRedisServer::start(['serve-then-stall:2', 'stall', 'close-on-first-read', 'serve']);
+    $reported = [];
+    $config = $server->config(['persistent' => true, 'persistent_id' => Str::random(), 'read_timeout' => 0.1]);
+
+    connectorReportingTo($reported)->connect($config, [])->get('key');
+
+    expect(connectorReportingTo($reported, stallingClock(stalledReadings: 3))->connect($config, [])->get('key'))->toBeNull()
+        ->and($reported)->toHaveCount(1)
+        ->and($reported[0]->context())->toMatchArray(['attempts' => 3])
+        ->and($reported[0]->reason)->toBeIn(['read_error', 'connection_lost']);
+    Sleep::assertSleptTimes(2);
 });
 
 it('does not retry a silent pooled socket once the retry window has closed', function (): void {
