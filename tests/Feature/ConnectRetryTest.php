@@ -436,3 +436,45 @@ it('closes the socket a failed attempt leaves, so a recovery adds none to the po
     'a trace that keeps call arguments' => '0',
     'a trace without call arguments' => '1',
 ]);
+
+it('leaves open a persistent stream that phpredis pooling is off for, since another client may share it', function (): void {
+    $previous = ini_set('redis.pconnect.pooling_enabled', '0');
+    // One TCP connection serves both clients, and refuses the second client's AUTH.
+    $server = FakeRedisServer::start(['serve-rejecting:99:AUTH']);
+    $reported = [];
+    $config = $server->config(['persistent' => true, 'persistent_id' => Str::random()]);
+
+    try {
+        $first = connectorReportingTo($reported)->connect($config, []);
+
+        $connector = connectorReportingTo($reported);
+        expect(fn (): PhpRedisConnection => $connector->connect([...$config, 'password' => 'secret'], []))
+            ->toThrow(RedisException::class, 'NOPERM');
+
+        expect($first->ping())->toBeTrue()
+            ->and($server->acceptedConnections())->toBe(1);
+    } finally {
+        ini_set('redis.pconnect.pooling_enabled', (string) $previous);
+    }
+});
+
+it("bounds the AUTH phpredis sends while it closes a failed attempt's socket, so the retry still starts in time", function (): void {
+    // Laravel passes credentials in the context only with TLS. Connection 1 answers AUTH, SELECT and GET, then goes silent.
+    // Connection 2 is the replacement phpredis opens inside the failed pconnect(), and it never answers the AUTH that
+    // close() sends.
+    $server = FakeRedisServer::start(['serve-then-stall:3', 'serve-then-stall:0', 'serve'], tls: true);
+    $reported = [];
+    $config = $server->config(['persistent' => true, 'persistent_id' => Str::random(), 'read_timeout' => 1.0], tls: true);
+    $config['context']['auth'] = 'secret';
+
+    connectorReportingTo($reported)->connect($config, [])->get('key');
+
+    $startedAt = microtime(true);
+    $connection = connectorReportingTo($reported, stallingClock(stalledReadings: 3))->connect($config, []);
+
+    expect(microtime(true) - $startedAt)->toBeLessThan(1.5)
+        ->and($server->hungUp(2))->toBeTrue()
+        ->and($connection->get('key'))->toBeNull()
+        ->and($reported)->toHaveCount(1)
+        ->and($reported[0]->reason)->toBe('stale_pooled_socket');
+});

@@ -46,7 +46,7 @@ The package tells this failure apart by where phpredis raised it: a fresh `pconn
 
 ### Closes the socket a failed attempt leaves
 
-When a pooled socket fails its check, phpredis opens a replacement inside the same `pconnect()` and then throws, so the failed client holds a socket. The package closes it before the next attempt. Otherwise it would return to the pool when the client is destroyed, so every recovery would add a socket to the pool. A client whose connect failed outright holds no socket and is left alone.
+When a pooled socket fails its check, phpredis opens a replacement inside the same `pconnect()` and then throws, so the failed client holds a socket. The package closes it before the next attempt. Otherwise it would return to the pool when the client is destroyed, so every recovery would add a socket to the pool. A client whose connect failed outright holds no socket and is left alone. With phpredis pooling off (`redis.pconnect.pooling_enabled=0`), PHP shares one persistent stream between the clients that name the same `persistent_id`, so a persistent client's socket is left open. With credentials in the stream context, phpredis sends AUTH before it closes a socket, and the package gives that AUTH 0.1 seconds, so a socket that went silent does not hold the retry back.
 
 ### Gives every connection a connect timeout
 
