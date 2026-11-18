@@ -124,6 +124,24 @@ it('does not retry a reply that stalled for a second', function (): void {
     Sleep::assertNeverSlept();
 });
 
+it('does not retry a pooled socket whose server went silent, which stalls the liveness check until the read timeout', function (): void {
+    // The first request's SELECT and GET are answered, then the server goes silent on that socket.
+    $server = FakeRedisServer::start(['serve-then-stall:2', 'serve']);
+    $reported = [];
+    $config = $server->config(['persistent' => true, 'persistent_id' => Str::random(), 'read_timeout' => 1.05]);
+
+    expect(connectorReportingTo($reported)->connect($config, [])->get('key'))->toBeNull();
+
+    // phpredis checks a pooled socket with an ECHO before reusing it, and the silent server never answers.
+    expect(fn (): PhpRedisConnection => connectorReportingTo($reported)->connect($config, []))
+        ->toThrow(RedisException::class, 'read error on connection');
+
+    expect($server->commands())->toHaveCount(3)
+        ->and($server->commands()[2])->toStartWith('ECHO')
+        ->and($reported)->toBeEmpty();
+    Sleep::assertNeverSlept();
+});
+
 it('does not retry a protocol error during the connect, since a server that is not Redis would answer the same', function (): void {
     $server = FakeRedisServer::start(['garbage-after:0']);
     $reported = [];

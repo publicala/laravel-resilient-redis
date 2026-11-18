@@ -176,6 +176,14 @@ while (true) {
                     continue 2;
                 }
 
+                // The socket stays open and nothing answers: a peer that vanished without a FIN or a RST.
+                if ($kind === 'serve-then-stall') {
+                    $client['step'] = 'stall';
+                    $record("stalled {$client['id']}");
+
+                    continue 2;
+                }
+
                 if ($kind === 'serve-then-reset') {
                     $resetSocket($stream);
                     unset($clients[(int) $stream]);
