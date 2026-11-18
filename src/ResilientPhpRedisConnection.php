@@ -100,7 +100,7 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
                 continue;
             }
 
-            $this->trackSessionState(mb_strtolower($method), $result, $mode);
+            $this->trackSessionState(mb_strtolower($method), $parameters, $result, $mode);
 
             // Dispatched outside the catch, so a listener that throws cannot run the command again.
             $this->events?->dispatch(new CommandExecuted(
@@ -271,8 +271,15 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
         return $result;
     }
 
-    private function trackSessionState(string $method, mixed $result, int $mode): void
+    /**
+     * @param  array<int, mixed>  $parameters
+     */
+    private function trackSessionState(string $method, array $parameters, mixed $result, int $mode): void
     {
+        if ($method === 'rawcommand' && $mode === Redis::ATOMIC && $result !== false) {
+            $this->trackRawCommand($parameters);
+        }
+
         $this->rememberDatabase();
 
         if ($method === 'exec' || $method === 'discard') {
@@ -295,6 +302,22 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
         }
 
         $this->watching = $method === 'watch';
+    }
+
+    /**
+     * Follow a raw command that changes the session the way its phpredis method would.
+     *
+     * @param  array<int, mixed>  $parameters
+     */
+    private function trackRawCommand(array $parameters): void
+    {
+        $command = mb_strtolower((string) ($parameters[0] ?? ''));
+
+        // phpredis does not see a raw SELECT, so it keeps reporting the old database and reconnects to it.
+        // Selecting through phpredis again puts the database in its own state.
+        if ($command === 'select' && is_numeric($parameters[1] ?? null)) {
+            rescue(fn (): bool => $this->client->select((int) $parameters[1]), false, false);
+        }
     }
 
     /**

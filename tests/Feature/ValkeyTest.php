@@ -79,3 +79,20 @@ it('reuses one pooled socket across persistent connections', function (): void {
 
     expect($second)->toBe($first);
 });
+
+it('keeps the database a raw SELECT chose after the server kills the connection', function (): void {
+    $redis = Redis::connection();
+    $redis->set('greeting', 'from database 0');
+    $redis->executeRaw(['SELECT', '3']);
+    $redis->set('greeting', 'from database 3');
+
+    $id = $redis->executeRaw(['CLIENT', 'ID']);
+    Redis::connection('admin')->executeRaw(['CLIENT', 'KILL', 'ID', (string) $id]);
+
+    try {
+        expect($redis->get('greeting'))->toBe('from database 3');
+    } finally {
+        $redis->select(3);
+        $redis->flushdb();
+    }
+});

@@ -4,6 +4,12 @@ All notable changes to `publicala/laravel-resilient-redis`.
 
 The top `## ` header is always the most recent version (`## vX.Y.Z`, exact), and that header is the source of truth the release workflow reads. Adding a new top block to this file is what cuts a release.
 
+## v3.1.1
+
+### Fixed
+
+- **A raw `SELECT` carries over a rebuild.** phpredis does not see a `SELECT` sent through `executeRaw()`, so it kept reporting the old database, and both the package's rebuild and phpredis's own reconnect returned to it: a replayed read answered from the wrong database. The connection now selects the same database through phpredis after a raw `SELECT` succeeds.
+
 ## v3.0.3
 
 ### Changed
