@@ -16,6 +16,7 @@ declare(strict_types=1);
  *   serve-rejecting:N:CMD answer N commands like serve:N, refusing CMD with a NOPERM error (phpredis throws)
  *   serve-unknown:N:CMD   answer N commands like serve:N, answering CMD with "ERR unknown command" (phpredis returns false)
  *   serve-then-drop:N     answer N commands, then reset the idle socket before the next one is sent
+ *   serve-then-stall:N    answer N commands, then keep the socket open and never answer again
  *   reset                 reset (RST) right after accepting
  *   close-on-first-read   wait for the first bytes (a TLS ClientHello or a command), then close (FIN)
  *   reset-on-first-read   wait for the first bytes, then reset
