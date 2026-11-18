@@ -7,6 +7,7 @@ use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Redis\Factory;
 use Illuminate\Redis\Connectors\PhpRedisConnector;
 use Illuminate\Redis\RedisManager;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\ServiceProvider;
 use Publicala\ResilientRedis\Events\CommandRecovered;
@@ -91,6 +92,15 @@ it('logs one warning per recovered connect or read', function (object $event, st
     'a connect' => [new ConnectRecovered('127.0.0.1', 6379, 0, true, 2, 140, 'read_error'), 'redis.connect.recovered'],
     'a read' => [new CommandRecovered('cache', 'get', 12, 'connection_reset'), 'redis.command.recovered'],
 ]);
+
+it('dispatches through the event dispatcher a test faked after the connections were set up', function (): void {
+    resolve(RecoveryEvents::class);
+    Event::fake([ConnectRecovered::class]);
+
+    resolve(RecoveryEvents::class)->dispatch(new ConnectRecovered('127.0.0.1', 6379, 0, false, 2, 140, 'read_error'));
+
+    Event::assertDispatched(ConnectRecovered::class);
+});
 
 it('does not log recoveries when told not to', function (): void {
     Log::spy();
