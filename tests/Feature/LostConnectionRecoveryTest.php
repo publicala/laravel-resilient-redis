@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Redis\Events\CommandExecuted;
 use Illuminate\Redis\Events\CommandFailed;
@@ -186,8 +187,17 @@ it('rethrows the command failure when the rebuild fails, since a lost write repl
     $client->select(0);
 
     $connection = new ResilientPhpRedisConnection($client, fn (): never => throw new RuntimeException('Valkey is unreachable.'), []);
+    $reported = [];
+    resolve(ExceptionHandler::class)->reportable(function (Throwable $e) use (&$reported): bool {
+        $reported[] = $e->getMessage();
+
+        return false;
+    });
 
     expect(fn () => $connection->set('job', 'payload'))->toThrowLostConnection();
+
+    // The rebuild's own failure is reported, so the reason the client could not reconnect is not lost.
+    expect($reported)->toBe(['Valkey is unreachable.']);
 });
 
 it('rethrows a lost connection as is when no connector can rebuild the client', function (): void {

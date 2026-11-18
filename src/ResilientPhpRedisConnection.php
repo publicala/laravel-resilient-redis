@@ -405,7 +405,8 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
      *
      * When the rebuild fails, the command's own failure is rethrown:
      * for a write it is the one that says the server may have run
-     * the command before the reply was lost.
+     * the command before the reply was lost. The rebuild's failure
+     * is reported.
      *
      * @throws Throwable
      */
@@ -439,7 +440,12 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
             $database = $this->selectedDatabase;
 
             throw_if($database !== null && $client->getDbNum() !== $database && $client->select($database) !== true, $cause);
-        } catch (Throwable) {
+        } catch (Throwable $rebuildFailure) {
+            // The rebuild's own failure is reported, since it says why the client could not reconnect.
+            if ($rebuildFailure !== $cause) {
+                rescue(fn () => report($rebuildFailure), report: false);
+            }
+
             throw $cause;
         }
 
