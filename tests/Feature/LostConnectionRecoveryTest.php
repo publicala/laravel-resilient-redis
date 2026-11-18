@@ -666,6 +666,18 @@ it('replays a read again once a raw EXEC the server refused ended the raw transa
         ->and(array_slice($server->commands(), -3))->toBe(['GET balance', 'SELECT 0', 'GET balance']);
 });
 
+it('keeps the raw transaction open when the server refuses a raw DISCARD, so a queued read is not replayed', function (): void {
+    // The server answers the DISCARD with an error, which phpredis returns as false, and keeps queuing.
+    $server = FakeRedisServer::start(['serve-unknown:3:DISCARD', 'serve']);
+    $connection = recoveringConnection($server);
+    $connection->executeRaw(['MULTI']);
+
+    expect($connection->executeRaw(['DISCARD']))->toBeFalse()
+        ->and(fn () => $connection->get('balance'))->toThrowLostConnection();
+
+    expect($server->commands())->toBe(['SELECT 0', 'MULTI', 'DISCARD', 'GET balance', 'SELECT 0']);
+});
+
 it('never replays a read while a raw WATCH a pipeline sent through the connection is open', function (): void {
     $server = FakeRedisServer::start(['serve:2', 'serve']);
     $connection = recoveringConnection($server);

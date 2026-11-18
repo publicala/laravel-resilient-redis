@@ -146,8 +146,10 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
 
                 $this->dispatchCommandFailed($method, $parameters, $e);
 
-                // The server ends a transaction on EXEC and DISCARD whatever they answer, an error reply phpredis throws included.
-                if (mb_strtolower($method) === 'rawcommand' && $mode === Redis::ATOMIC && $this->endsRawTransaction($parameters)) {
+                // The server ends a transaction on EXEC whatever it answers, an error reply phpredis throws (EXECABORT) included.
+                // A DISCARD that throws either lost the connection, which the rebuild resets, or was refused and left it open.
+                if (mb_strtolower($method) === 'rawcommand' && $mode === Redis::ATOMIC && $this->endsRawTransaction($parameters)
+                    && mb_strtolower((string) ($parameters[0] ?? '')) === 'exec') {
                     // Whether a queued SELECT ran is unknown, and asking would make phpredis reconnect a failed client.
                     $this->rawSelectQueued = false;
                     $this->inRawTransaction = false;
@@ -434,8 +436,9 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
     {
         $command = mb_strtolower((string) ($parameters[0] ?? ''));
 
-        // The server ends the transaction and every WATCH on EXEC and DISCARD, whatever they answer.
-        if ($this->endsRawTransaction($parameters)) {
+        // The server ends the transaction and every WATCH on EXEC, whatever it answers, and on a DISCARD it accepted.
+        // A DISCARD it refused (false) leaves the transaction queuing.
+        if ($this->endsRawTransaction($parameters) && ($command === 'exec' || $result !== false)) {
             $this->inRawTransaction = false;
             $this->settleBatch(closesWatch: true);
 
