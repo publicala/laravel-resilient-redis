@@ -155,6 +155,11 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
         parent::establishConnection($client, $config);
     }
 
+    private static function poolsPersistentSockets(): bool
+    {
+        return (int) ini_get('redis.pconnect.pooling_enabled') === 1;
+    }
+
     /**
      * Close the socket a failed attempt holds. A pooled socket that fails its liveness check makes phpredis
      * open a replacement inside the same pconnect(), and a persistent client returns its socket to the pool
@@ -182,11 +187,6 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
         if ($client->isConnected()) {
             $client->setOption(Redis::OPT_READ_TIMEOUT, $readTimeout);
         }
-    }
-
-    private static function poolsPersistentSockets(): bool
-    {
-        return (int) ini_get('redis.pconnect.pooling_enabled') === 1;
     }
 
     /**
