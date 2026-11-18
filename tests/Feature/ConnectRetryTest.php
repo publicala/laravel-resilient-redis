@@ -140,7 +140,31 @@ it('does not retry a pooled socket whose server went silent, which stalls the li
         ->and($server->commands()[2])->toStartWith('ECHO')
         ->and($reported)->toBeEmpty();
     Sleep::assertNeverSlept();
+
+    // phpredis discarded the silent socket, so the next connect opens a fresh one.
+    expect(connectorReportingTo($reported)->connect($config, [])->get('key'))->toBeNull()
+        ->and(array_slice($server->commands(), -2))->toBe(['SELECT 0', 'GET key']);
 });
+
+it('does not retry a fresh persistent connection whose server stalls on AUTH or SELECT', function (array $config, string $call): void {
+    $server = FakeRedisServer::start(['stall']);
+    $reported = [];
+
+    try {
+        connectorReportingTo($reported)->connect($server->config(['persistent' => true, 'persistent_id' => Str::random(), 'read_timeout' => 1.05, ...$config]), []);
+        $this->fail('The connect did not fail.');
+    } catch (RedisException $e) {
+        expect($e->getMessage())->toContain('read error on connection')
+            ->and($e->getTrace()[0]['function'])->toBe($call);
+    }
+
+    expect($server->acceptedConnections())->toBe(1)
+        ->and($reported)->toBeEmpty();
+    Sleep::assertNeverSlept();
+})->with([
+    'AUTH' => [['password' => 'secret'], 'auth'],
+    'SELECT' => [[], 'select'],
+]);
 
 it('does not retry a protocol error during the connect, since a server that is not Redis would answer the same', function (): void {
     $server = FakeRedisServer::start(['garbage-after:0']);

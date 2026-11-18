@@ -12,7 +12,8 @@ Pest `it()` only. Every file declares `declare(strict_types=1)`.
 ## Traps
 
 - An arrow function captures by value. A closure built inside `fn () => ...` that uses `&$var` binds to the copy, so build connectors and callbacks outside `expect(fn () => ...)`.
-- phpredis pools persistent sockets by host and port, and fake servers reuse random ports. Give every persistent connection its own `persistent_id`.
+- phpredis pools persistent sockets by host and port, and fake servers reuse random ports. The default `redis.pconnect.pool_pattern` leaves `persistent_id` out of the pool key, so a distinct `persistent_id` does not keep a pooled socket from an earlier test away from a new server on the same port. Give every persistent connection its own `persistent_id` anyway, since PHP keys its persistent streams by it.
+- phpredis checks a pooled socket with an `ECHO` before reusing it, and opens a replacement socket after the check fails, so accepted connections can exceed attempts. Assert the commands the server received.
 - phpredis reconnects an idle socket it finds closed (`max_retries`, 10 by default), and `close()` on a failed client reconnects it first. Count accepted connections, not assumptions.
 - `throw_unless()` and `throw_if()` evaluate their message arguments eagerly.
 - `->not->toThrow(Throwable::class)` passes even when the callback throws: Pest reads an interface name as message text. To assert that nothing escapes, call the code directly and assert its effect.
