@@ -42,7 +42,7 @@ phpredis checks a pooled (persistent) socket with an `ECHO` before it reuses it.
 
 The retry opens a socket of its own instead of taking another from the pool. phpredis hands out its oldest pooled socket first, and a server that dropped one socket silently usually dropped the others with it. The retry's socket is not persistent and closes when the client is destroyed. The pool's other stale sockets stay in the pool, and a later connect that takes one waits a read timeout and retries the same way.
 
-The package tells this failure apart by where phpredis raised it: a fresh `pconnect()` sends no command, so a read error from `pconnect()` itself comes from the liveness check. A server that stalls on AUTH or SELECT raises it from `auth()` or `select()`, so that slow failure is not retried. When the server itself has stopped answering, the retry stalls on AUTH or SELECT too, so the connect fails after about two read timeouts instead of one. Laravel sends AUTH only with a `password` and SELECT only with a `database`, so a connection with neither connects on the retry's socket, and the stall surfaces on its next command.
+The package tells this failure apart by where phpredis raised it: a fresh `pconnect()` sends no command, so a read error from `pconnect()` itself comes from the liveness check. A server that stalls on AUTH or SELECT raises it from `auth()` or `select()`, so that slow failure is not retried. When the server itself has stopped answering, the retry stalls on its first command too, so the connect fails after about two read timeouts instead of one. Laravel sends AUTH only with a `password`, SELECT only with a `database` and CLIENT SETNAME only with a `name`, so a connection with none of them connects on the retry's socket, and the stall surfaces on its next command.
 
 ### Closes the socket a failed attempt leaves
 
@@ -78,7 +78,7 @@ redis.connect.recovered {"host":"tls://cache.example.com","port":6379,"database"
 redis.command.recovered {"connection":"cache","command":"get","milliseconds":12,"reason":"connection_reset"}
 ```
 
-The events carry a reason code, never the exception text, arguments or credentials. A failing listener is reported and never changes the outcome of the Redis call.
+The events carry a reason code, never the exception text, arguments or credentials. `persistent` is the connection's setting, also when a recovery connected on the retry's own socket. A failing listener is reported and never changes the outcome of the Redis call.
 
 ## Replacing a custom connector
 
@@ -123,7 +123,7 @@ A changed switch takes effect once the config cache is rebuilt and long-running 
 - **`timeout`**: keep it short (2 seconds). It bounds the TCP connect and the TLS handshake. It does not bound name resolution or the replies to AUTH and SELECT.
 - **`read_timeout`**: set one (for example 5 seconds) when a request has a hard deadline, such as Octane's `max_execution_time`, and the connection runs no blocking commands (`BLPOP` with a timeout, a queue with `block_for`). Without it, a reply that never comes waits for `default_socket_timeout`. It also bounds phpredis's liveness check on a pooled socket the connection opened, so keep it well under the retry window (5 seconds with the default 6) for a silent pooled socket to get its retry.
 - **`persistent`**: reusing sockets across requests saves a TLS handshake per request. A pooled socket the server dropped is the failure this package retries best. One the server abandoned silently costs a read timeout before its retry.
-- **`redis.pconnect.pool_pattern`**: phpredis pools sockets by host and port, and sets `read_timeout` only on a socket it opens, so a pooled socket keeps the read timeout of the connection that opened it. The liveness check, and every command on a reused socket, wait that timeout. When connections on one server set different read timeouts (a queue connection with none waits `default_socket_timeout`, 60 seconds by default), set `redis.pconnect.pool_pattern=i` in `php.ini` and give each connection its own `persistent_id`, so each reuses only sockets it opened.
+- **`redis.pconnect.pool_pattern`**: phpredis pools sockets by host and port, and a pooled socket keeps the read timeout last set on it. The liveness check runs before Laravel applies the connection's own `read_timeout`, so it waits the timeout of the connection that used the socket last, and a connection that sets no `read_timeout` keeps that timeout for its commands too. When connections on one server set different read timeouts (a queue connection with none waits `default_socket_timeout`, 60 seconds by default, and its blocking commands need no cut), set `redis.pconnect.pool_pattern=i` in `php.ini` and give each connection its own `persistent_id`, so each reuses only sockets it opened.
 
 ## Limits
 

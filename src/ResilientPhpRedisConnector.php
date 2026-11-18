@@ -154,7 +154,8 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
      * Close the socket a failed attempt holds. A pooled socket that fails its liveness check makes phpredis
      * open a replacement inside the same pconnect(), and a persistent client returns its socket to the pool
      * when it is destroyed, so leaving it open would add a socket to the pool on every recovery.
-     * phpredis reconnects a failed client just to close it, so one without a socket is left alone.
+     * phpredis reconnects a failed client just to close it, so one without a socket is left alone. With
+     * credentials in the stream context, phpredis sends AUTH before it closes a socket, and keeps one whose AUTH fails.
      */
     private function closeFailedClient(): void
     {
