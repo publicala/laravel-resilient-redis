@@ -84,6 +84,7 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
         $firstAttemptAt = $this->now();
         $lastFailure = null;
         $lastReason = null;
+        $attemptConfig = $config;
 
         for ($attempt = 1; ; $attempt++) {
             $attemptStartedAt = $this->now();
@@ -94,7 +95,7 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
             }
 
             try {
-                $client = parent::createClient($config);
+                $client = parent::createClient($attemptConfig);
             } catch (Throwable $e) {
                 $failedAfter = $this->now() - $attemptStartedAt;
                 $this->closeFailedClient();
@@ -108,6 +109,12 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
 
                 $lastFailure = $e;
                 $lastReason = $reason;
+
+                // The pool hands out its oldest socket first, and a server that dropped one silently usually dropped
+                // the others with it, so the retry opens a socket of its own. It closes when the client is destroyed.
+                if ($reason === Failure::STALE_POOLED_SOCKET) {
+                    $attemptConfig['persistent'] = false;
+                }
 
                 continue;
             } finally {

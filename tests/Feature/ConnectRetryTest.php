@@ -158,7 +158,7 @@ it('retries a pooled socket whose server went silent, which stalls the liveness 
         ->and($reported[0]->context())->toMatchArray(['persistent' => true, 'attempts' => 2, 'reason' => 'stale_pooled_socket']);
 });
 
-it('retries a silent pooled socket only once, even when the retry takes a second silent socket', function (): void {
+it('retries a silent pooled socket on a socket of its own, since the others in the pool are usually silent too', function (): void {
     $server = FakeRedisServer::start(['serve-then-stall:2', 'serve-then-stall:2', 'serve']);
     $reported = [];
     $config = $server->config(['persistent' => true, 'persistent_id' => Str::random(), 'read_timeout' => 0.1]);
@@ -170,12 +170,10 @@ it('retries a silent pooled socket only once, even when the retry takes a second
     $second->get('key');
     unset($first, $second);
 
-    $connector = connectorReportingTo($reported, stallingClock());
-    expect(fn (): PhpRedisConnection => $connector->connect($config, []))
-        ->toThrow(RedisException::class, 'read error on connection');
-
-    expect(array_values(array_filter($server->commands(), fn (string $command): bool => str_starts_with($command, 'ECHO'))))->toHaveCount(2)
-        ->and($reported)->toBeEmpty();
+    expect(connectorReportingTo($reported, stallingClock())->connect($config, [])->get('key'))->toBeNull()
+        ->and(array_values(array_filter($server->commands(), fn (string $command): bool => str_starts_with($command, 'ECHO'))))->toHaveCount(1)
+        ->and($reported)->toHaveCount(1)
+        ->and($reported[0]->context())->toMatchArray(['persistent' => true, 'attempts' => 2, 'reason' => 'stale_pooled_socket']);
     Sleep::assertSleptTimes(1);
 });
 
