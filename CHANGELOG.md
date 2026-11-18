@@ -15,6 +15,7 @@ The top `## ` header is always the most recent version (`## vX.Y.Z`, exact), and
 - **`Event::fake()` sees recovery events.** The events were dispatched through the dispatcher resolved when the first Redis connection was set up, so a dispatcher swapped in later, as `Event::fake()` does, never received them. The dispatcher is now resolved for each event.
 - **A server error reply is never read as a lost connection.** phpredis throws an error reply with the server's own text for any code but `ERR`, so a module or a script whose error mentioned `socket`, `went away` or `Connection lost` rebuilt the client and replayed the read. A `RedisException` that starts with an all-caps error code is now left alone, except `READONLY`.
 - **A rebuild leaves a shared persistent stream open.** With `redis.pconnect.pooling_enabled` off, PHP shares one persistent stream between the clients that name the same `persistent_id`. A rebuild after a `READONLY` reply or a protocol error closed that stream under the other clients, and a persistent rebuild would have taken the same stream back. The stream now stays open, and the rebuild connects on a socket of its own.
+- **A rebuilt client keeps `OPT_PACK_IGNORE_NUMBERS` and a runtime read timeout.** With the PHP serializer and `OPT_PACK_IGNORE_NUMBERS` on, a number written after a rebuild was stored serialized (`i:2;`), so `INCR` refused it. A read timeout set at runtime went back to the configured one. Both carry over now. A client with no read timeout keeps none, so PHP's `default_socket_timeout` still applies.
 
 ## v3.0.3
 

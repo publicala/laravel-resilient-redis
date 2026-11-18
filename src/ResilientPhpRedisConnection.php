@@ -47,6 +47,7 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
         Redis::OPT_SERIALIZER,
         Redis::OPT_COMPRESSION,
         Redis::OPT_COMPRESSION_LEVEL,
+        Redis::OPT_READ_TIMEOUT,
     ];
 
     /**
@@ -398,7 +399,10 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
         throw_if($this->connector === null, $cause);
 
         $previous = $this->client;
-        $options = collect(self::RUNTIME_OPTIONS)->mapWithKeys(fn (int $option): array => [$option => $previous->getOption($option)]);
+        $options = collect(self::runtimeOptions())
+            ->mapWithKeys(fn (int $option): array => [$option => $previous->getOption($option)])
+            // A read timeout of zero means none was set, which leaves PHP's default_socket_timeout on the socket. Setting zero would turn it off.
+            ->reject(fn (mixed $value, int $option): bool => $option === Redis::OPT_READ_TIMEOUT && (float) $value <= 0);
 
         // A client that still holds its socket (a READONLY reply, a reply stream out of step) is closed: phpredis returns the
         // socket of a persistent client it destroys to the pool. It reconnects a failed client just to close it, so one is left alone.
@@ -425,6 +429,18 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
         }
 
         $this->client = $client;
+    }
+
+    /**
+     * The runtime options this phpredis has. phpredis declares OPT_PACK_IGNORE_NUMBERS, which changes how the serializer stores a number, from 6.2.
+     *
+     * @return list<int>
+     */
+    private static function runtimeOptions(): array
+    {
+        $packIgnoreNumbers = Redis::class.'::OPT_PACK_IGNORE_NUMBERS';
+
+        return defined($packIgnoreNumbers) ? [...self::RUNTIME_OPTIONS, (int) constant($packIgnoreNumbers)] : self::RUNTIME_OPTIONS;
     }
 
     /**

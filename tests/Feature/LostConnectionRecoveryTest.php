@@ -309,6 +309,35 @@ it('keeps the prefix a caller set on the client when it rebuilds it', function (
     expect($server->commands())->toBe(['SELECT 0', 'GET tenant:greeting', 'SELECT 0', 'GET tenant:greeting']);
 });
 
+it('keeps the numbers a caller told the serializer to leave alone when it rebuilds the client', function (): void {
+    $server = FakeRedisServer::start(['serve:1', 'serve']);
+    $connection = recoveringConnection($server);
+    $connection->client()->setOption(Redis::OPT_SERIALIZER, Redis::SERIALIZER_PHP);
+    $connection->client()->setOption(Redis::OPT_PACK_IGNORE_NUMBERS, true);
+
+    $connection->get('visits');
+    $connection->set('visits', 2);
+
+    expect(array_slice($server->commands(), -1))->toBe(['SET visits 2']);
+})->skip(! defined('Redis::OPT_PACK_IGNORE_NUMBERS'), 'This phpredis has no OPT_PACK_IGNORE_NUMBERS.');
+
+it('keeps the read timeout a caller set at runtime when it rebuilds the client, and the configured one or none otherwise', function (array $config, ?float $runtime, float $expected): void {
+    $server = FakeRedisServer::start(['serve:1', 'serve']);
+    $connection = recoveringConnection($server, overrides: $config);
+
+    if ($runtime !== null) {
+        $connection->client()->setOption(Redis::OPT_READ_TIMEOUT, $runtime);
+    }
+
+    $connection->get('greeting');
+
+    expect($connection->client()->getOption(Redis::OPT_READ_TIMEOUT))->toBe($expected);
+})->with([
+    'a runtime timeout' => [['read_timeout' => 0.8], 0.09, 0.09],
+    'the configured timeout' => [['read_timeout' => 0.8], null, 0.8],
+    'no timeout, so PHP default_socket_timeout' => [[], null, 0.0],
+]);
+
 it('selects again the database a caller switched to', function (): void {
     $server = FakeRedisServer::start(['serve:2', 'serve']);
     $connection = recoveringConnection($server);
