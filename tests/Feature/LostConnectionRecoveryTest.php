@@ -134,10 +134,11 @@ it('rebuilds the client but does not replay a read that waited out the read time
 
     expect(fn () => $connection->get('greeting'))->toThrowLostConnection();
 
-    expect($server->acceptedConnections())->toBe(2)
-        ->and($reported)->toBeEmpty()
-        ->and($connection->ping())->toBeTrue()
-        ->and($server->commands())->toBe(['PING']);
+    // The PING proves the server accepted the rebuilt client's socket before the count is read.
+    expect($connection->ping())->toBeTrue()
+        ->and($server->acceptedConnections())->toBe(2)
+        ->and($server->commands())->toBe(['PING'])
+        ->and($reported)->toBeEmpty();
 });
 
 it('rebuilds the client but never replays a write, because the server may already have run it', function (Closure $write, string $sent): void {
@@ -558,6 +559,7 @@ it('stops a transaction whose MULTI loses the connection after a pipeline that m
     $server = FakeRedisServer::start(['serve:2', 'serve']);
     $connection = recoveringConnection($server);
     $connection->pipeline(fn (Redis $pipeline): Redis|bool => $pipeline->watch('balance'));
+
     $ran = false;
     $callback = function () use (&$ran): void {
         $ran = true;
