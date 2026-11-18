@@ -8,7 +8,7 @@ The top `## ` header is always the most recent version (`## vX.Y.Z`, exact), and
 
 ### Changed
 
-- **A pooled socket whose server went silent is retried once.** phpredis checks a pooled persistent socket with an `ECHO` before reusing it, and when nothing answers, `pconnect()` throws `read error on connection` after `read_timeout`, which the package declined as a stall. phpredis has already discarded that socket, so the first attempt that fails this way now gets one more attempt on a fresh socket, within the retry window, reported with the reason `stale_pooled_socket`. A read error raised by `auth()` or `select()`, a server that stalls, is still not retried.
+- **A pooled socket whose server went silent is retried once.** phpredis checks a pooled persistent socket with an `ECHO` before reusing it, and when nothing answers, `pconnect()` throws `read error on connection` after `read_timeout`, which the package declined as a stall. phpredis has already discarded that socket, so a first attempt that fails this way after a second or more now gets one more attempt, on another pooled socket or a fresh one, within the retry window, reported with the reason `stale_pooled_socket`. A slow read error raised by `auth()` or `select()`, a server that stalls, is still not retried.
 - **The README no longer claims that 18 requests succeeded on a retried connect.** Those reconnects succeeded, but the requests behind them still failed.
 
 ## v3.0.3

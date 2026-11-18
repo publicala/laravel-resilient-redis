@@ -81,7 +81,7 @@ final class Failure
      *
      * A fresh pconnect() opens the transport and sends no command, so a read error raised
      * by pconnect() itself comes from the ECHO phpredis sends before it reuses a pooled
-     * socket. phpredis discards that socket, so another attempt takes a fresh one.
+     * socket. phpredis discards that socket, so another attempt takes a different one.
      */
     public static function isStalePooledSocket(Throwable $e): bool
     {

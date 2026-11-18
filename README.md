@@ -38,9 +38,9 @@ No attempt starts 6 seconds or more after the first one began. A resolver that t
 
 ### Retries a pooled socket whose server went silent
 
-phpredis checks a pooled (persistent) socket with an `ECHO` before it reuses it. When the server or something between vanished without closing the socket, nothing answers, and `pconnect()` throws `read error on connection` once `read_timeout` runs out. phpredis discards that socket, so the first attempt that fails this way gets one more attempt on a fresh socket, however long it took, within the same window. It is reported with the reason `stale_pooled_socket`. With a `read_timeout` of 5 seconds the retry starts about 5.2 seconds after the first attempt, and with one near or above 6 seconds there is none.
+phpredis checks a pooled (persistent) socket with an `ECHO` before it reuses it. When the server or something between vanished without closing the socket, nothing answers, and `pconnect()` throws `read error on connection` once `read_timeout` runs out. phpredis discards that socket, so when the first attempt fails this way after a second or more, it gets one more attempt, within the same window, and a recovery is reported with the reason `stale_pooled_socket`. That attempt takes another pooled socket or opens a fresh one. When it takes a second silent socket, it fails the same way and is not retried again. With a `read_timeout` of 5 seconds the retry starts about 5.2 seconds after the first attempt. The window is checked against the elapsed time plus the wait before the retry, so a `read_timeout` close to 6 seconds leaves no room for it. A pooled socket that fails faster keeps the fast rules above and its reason `read_error`.
 
-The package tells this failure apart by where phpredis raised it: a fresh `pconnect()` sends no command, so a read error from `pconnect()` itself comes from the liveness check. A server that stalls on AUTH or SELECT raises it from `auth()` or `select()`, and is not retried. When the server itself has stopped answering, the fresh socket stalls on AUTH or SELECT too, so the connect fails after about two read timeouts instead of one.
+The package tells this failure apart by where phpredis raised it: a fresh `pconnect()` sends no command, so a read error from `pconnect()` itself comes from the liveness check. A server that stalls on AUTH or SELECT raises it from `auth()` or `select()`, so that slow failure is not retried. When the server itself has stopped answering, the fresh socket stalls on AUTH or SELECT too, so the connect fails after about two read timeouts instead of one.
 
 ### Gives every connection a connect timeout
 
@@ -115,7 +115,7 @@ A changed switch takes effect once the config cache is rebuilt and long-running 
 ### Recommended connection settings
 
 - **`timeout`**: keep it short (2 seconds). It bounds the TCP connect and the TLS handshake. It does not bound name resolution or the replies to AUTH and SELECT.
-- **`read_timeout`**: set one (for example 5 seconds) when a request has a hard deadline, such as Octane's `max_execution_time`, and the connection runs no blocking commands (`BLPOP` with a timeout, a queue with `block_for`). Without it, a reply that never comes waits for `default_socket_timeout`. It also bounds phpredis's liveness check on a pooled socket, so keep it under the retry window (5.8 seconds or less with the default) for a silent pooled socket to get its retry.
+- **`read_timeout`**: set one (for example 5 seconds) when a request has a hard deadline, such as Octane's `max_execution_time`, and the connection runs no blocking commands (`BLPOP` with a timeout, a queue with `block_for`). Without it, a reply that never comes waits for `default_socket_timeout`. It also bounds phpredis's liveness check on a pooled socket, so keep it well under the retry window (5 seconds with the default 6) for a silent pooled socket to get its retry.
 - **`persistent`**: reusing sockets across requests saves a TLS handshake per request. A pooled socket the server dropped is the failure this package retries best. One the server abandoned silently costs a `read_timeout` before its retry.
 
 ## Limits

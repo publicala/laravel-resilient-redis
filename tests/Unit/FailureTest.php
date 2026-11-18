@@ -48,6 +48,27 @@ it('tells a stale pooled socket apart from other connect failures', function (Th
     'a read error raised outside phpredis' => [new RedisException('read error on connection to tls://cache.example.com:6379')],
     'a timeout inside pconnect' => [raisedBy(new RedisException('Connection timed out'), 'pconnect')],
     'a TLS warning inside pconnect' => [raisedBy(new ErrorException('Redis::pconnect(): SSL: Handshake timed out'), 'pconnect')],
+    'a read error with no trace' => [(function (): RedisException {
+        $e = new RedisException('read error on connection to tls://cache.example.com:6379');
+        (new ReflectionProperty(Exception::class, 'trace'))->setValue($e, []);
+
+        return $e;
+    })()],
+    'a read error from another class named pconnect' => [(function (): RedisException {
+        $e = new RedisException('read error on connection to tls://cache.example.com:6379');
+        (new ReflectionProperty(Exception::class, 'trace'))->setValue($e, [['class' => 'App\\Cache\\Pool', 'type' => '->', 'function' => 'pconnect']]);
+
+        return $e;
+    })()],
+    'a read error from AUTH called inside pconnect' => [(function (): RedisException {
+        $e = new RedisException('read error on connection to tls://cache.example.com:6379');
+        (new ReflectionProperty(Exception::class, 'trace'))->setValue($e, [
+            ['class' => Redis::class, 'type' => '->', 'function' => 'auth'],
+            ['class' => Redis::class, 'type' => '->', 'function' => 'pconnect'],
+        ]);
+
+        return $e;
+    })()],
 ]);
 
 it('names a command failure that means a lost connection', function (Throwable $e, string $reason): void {

@@ -143,6 +143,26 @@ it('retries a pooled socket whose server went silent, which stalls the liveness 
         ->and($reported[0]->context())->toMatchArray(['persistent' => true, 'attempts' => 2, 'reason' => 'stale_pooled_socket']);
 });
 
+it('retries a silent pooled socket only once, even when the retry takes a second silent socket', function (): void {
+    $server = FakeRedisServer::start(['serve-then-stall:2', 'serve-then-stall:2', 'serve']);
+    $reported = [];
+    $config = $server->config(['persistent' => true, 'persistent_id' => Str::random(), 'read_timeout' => 1.05]);
+
+    // Two connections open at once leave two sockets in the pool, and the server then goes silent on both.
+    $first = connectorReportingTo($reported)->connect($config, []);
+    $second = connectorReportingTo($reported)->connect($config, []);
+    $first->get('key');
+    $second->get('key');
+    unset($first, $second);
+
+    expect(fn (): PhpRedisConnection => connectorReportingTo($reported)->connect($config, []))
+        ->toThrow(RedisException::class, 'read error on connection');
+
+    expect(array_values(array_filter($server->commands(), fn (string $command): bool => str_starts_with($command, 'ECHO'))))->toHaveCount(2)
+        ->and($reported)->toBeEmpty();
+    Sleep::assertSleptTimes(1);
+});
+
 it('does not retry a silent pooled socket once the retry window has closed', function (): void {
     $server = FakeRedisServer::start(['serve-then-stall:2', 'serve']);
     $reported = [];
