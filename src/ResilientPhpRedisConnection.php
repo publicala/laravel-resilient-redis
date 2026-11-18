@@ -9,6 +9,7 @@ use Illuminate\Redis\Connections\PhpRedisConnection;
 use Illuminate\Redis\Events\CommandExecuted;
 use Illuminate\Redis\Events\CommandFailed;
 use Publicala\ResilientRedis\Events\CommandRecovered;
+use Publicala\ResilientRedis\Events\RebuildFailed;
 use Redis;
 use Throwable;
 
@@ -511,8 +512,9 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
      *
      * When the rebuild fails, the command's own failure is rethrown:
      * for a write it is the one that says the server may have run
-     * the command before the reply was lost. The rebuild's failure
-     * is reported.
+     * the command before the reply was lost. The failed rebuild is
+     * reported as an event, which a listener that uses Redis cannot
+     * trigger again.
      *
      * @throws Throwable
      */
@@ -546,10 +548,9 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
             $database = $this->selectedDatabase;
 
             throw_if($database !== null && $client->getDbNum() !== $database && $client->select($database) !== true, $cause);
-        } catch (Throwable $throwable) {
-            // The rebuild's own failure is reported, since it says why the client could not reconnect.
-            if ($throwable !== $cause) {
-                rescue(fn () => report($throwable), report: false);
+        } catch (Throwable) {
+            if ($this->report instanceof Closure) {
+                ($this->report)(new RebuildFailed(connection: (string) $this->getName(), reason: (string) Failure::lostConnectionReason($cause)));
             }
 
             throw $cause;

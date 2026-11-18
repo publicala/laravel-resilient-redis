@@ -36,8 +36,9 @@ return [
     | Log Recoveries
     |--------------------------------------------------------------------------
     |
-    | Log a warning each time a connect or a read recovers. Listen for the
-    | ConnectRecovered and CommandRecovered events to report them yourself.
+    | Log a warning each time a connect or a read recovers, and each time a
+    | client cannot be rebuilt. Listen for the ConnectRecovered,
+    | CommandRecovered and RebuildFailed events to report them yourself.
     |
     */
 

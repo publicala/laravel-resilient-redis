@@ -9,6 +9,7 @@ use Illuminate\Redis\Events\CommandFailed;
 use Illuminate\Support\Sleep;
 use Illuminate\Support\Str;
 use Publicala\ResilientRedis\Events\CommandRecovered;
+use Publicala\ResilientRedis\Events\RebuildFailed;
 use Publicala\ResilientRedis\ResilientPhpRedisConnection;
 use Publicala\ResilientRedis\ResilientPhpRedisConnector;
 use Publicala\ResilientRedis\Tests\Support\FakeRedisServer;
@@ -203,18 +204,32 @@ it('rethrows the command failure when the rebuild fails, since a lost write repl
     $client->connect('127.0.0.1', $server->port, 1.0);
     $client->select(0);
 
-    $connection = new ResilientPhpRedisConnection($client, fn (): never => throw new RuntimeException('Valkey is unreachable.'), []);
-    $reported = [];
-    resolve(ExceptionHandler::class)->reportable(function (Throwable $e) use (&$reported): bool {
-        $reported[] = $e->getMessage();
+    $events = [];
+    $connection = new ResilientPhpRedisConnection(
+        $client,
+        fn (): never => throw new RuntimeException('Valkey is unreachable.'),
+        [],
+        function (object $event) use (&$events): void {
+            $events[] = $event;
+        },
+    );
+    $connection->setName('cache');
+    $handled = [];
+    resolve(ExceptionHandler::class)->reportable(function (Throwable $e) use (&$handled): bool {
+        $handled[] = $e->getMessage();
 
         return false;
     });
 
     expect(fn () => $connection->set('job', 'payload'))->toThrowLostConnection();
 
-    // The rebuild's own failure is reported, so the reason the client could not reconnect is not lost.
-    expect($reported)->toBe(['Valkey is unreachable.']);
+    // The failed rebuild goes out as an event, through the guard that keeps a listener from recovering Redis again,
+    // and the exception handler sees only the command's error, which the caller reports.
+    expect($handled)->toBeEmpty()
+        ->and($events)->toHaveCount(1)
+        ->and($events[0])->toBeInstanceOf(RebuildFailed::class)
+        ->and($events[0]->connection)->toBe('cache')
+        ->and($events[0]->reason)->toBeIn(['read_error', 'connection_lost']);
 });
 
 it('rethrows a lost connection as is when no connector can rebuild the client', function (): void {
