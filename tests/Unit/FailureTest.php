@@ -4,6 +4,13 @@ declare(strict_types=1);
 
 use Publicala\ResilientRedis\Failure;
 
+it('retries the temporary DNS failure musl reports as Try again, only in a getaddrinfo message', function (): void {
+    expect(Failure::retryableConnectReason(new RedisException('php_network_getaddresses: getaddrinfo for cache.example.com failed: Try again')))->toBe(Failure::TEMPORARY_DNS)
+        ->and(Failure::retryableConnectReason(new ErrorException('Redis::connect(): php_network_getaddresses: getaddrinfo for cache.example.com failed: Try again')))->toBe(Failure::TEMPORARY_DNS)
+        ->and(Failure::retryableConnectReason(new RedisException('ERR Try again')))->toBeNull()
+        ->and(Failure::retryableConnectReason(new RedisException('getaddrinfo for cache.example.com failed: Name or service not known. Try again')))->toBeNull();
+});
+
 it('names a connect failure that ends fast and may be retried', function (Throwable $e, string $reason): void {
     expect(Failure::retryableConnectReason($e))->toBe($reason);
 })->with([

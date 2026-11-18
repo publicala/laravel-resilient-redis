@@ -23,7 +23,7 @@ Every connect Laravel's phpredis connector makes goes through the package: the f
 | `read error on connection`, `Connection lost`, `went away` during AUTH or SELECT | The server dropped a pooled (persistent) socket |
 | `SSL: Connection reset by peer`, `SSL: Broken pipe` | A TLS frontend reset the handshake |
 | `Connection refused`, a missing Unix socket | The server is restarting |
-| `Temporary failure in name resolution` | The resolver failed for now |
+| `Temporary failure in name resolution` (glibc), `getaddrinfo for ... failed: Try again` (musl, as on Alpine) | The resolver failed for now |
 
 In one 30-day production sample, all 18 requests whose connect failed on a pooled socket the server had dropped succeeded on the second attempt, 110–170 ms later.
 

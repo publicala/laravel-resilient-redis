@@ -66,7 +66,8 @@ final class Failure
             return null;
         }
 
-        if (Str::contains($e->getMessage(), 'Temporary failure in name resolution')) {
+        // glibc names EAI_AGAIN "Temporary failure in name resolution", and musl names it "Try again".
+        if (Str::contains($e->getMessage(), 'Temporary failure in name resolution') || preg_match('/getaddrinfo for \S+ failed: Try again$/', $e->getMessage()) === 1) {
             return self::TEMPORARY_DNS;
         }
 
