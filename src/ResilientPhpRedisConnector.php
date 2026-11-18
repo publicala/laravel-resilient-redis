@@ -87,7 +87,10 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
         /** @param array<string, mixed> $overrides */
         $connector = fn (array $overrides = []): Redis => $this->createClient(array_merge($config, $options, $formattedOptions, $overrides));
 
-        return new ResilientPhpRedisConnection($connector(), $connector, $config, $this->report);
+        // persistent may sit on the connection, in its options or in the global redis.options, as createClient() reads it.
+        $persistent = (bool) (array_merge($config, $options, $formattedOptions)['persistent'] ?? false);
+
+        return new ResilientPhpRedisConnection($connector(), $connector, $config, $this->report, $persistent);
     }
 
     /**

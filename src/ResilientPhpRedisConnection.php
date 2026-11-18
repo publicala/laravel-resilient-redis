@@ -102,8 +102,9 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
      * @param  Redis  $client
      * @param  array<string, mixed>  $config
      * @param  (Closure(object): void)|null  $report
+     * @param  bool  $persistent  whether the connector opens persistent clients, from wherever the config sets it
      */
-    public function __construct($client, ?callable $connector, array $config, private readonly ?Closure $report = null)
+    public function __construct($client, ?callable $connector, array $config, private readonly ?Closure $report = null, private readonly bool $persistent = false)
     {
         parent::__construct($client, $connector, $config);
 
@@ -532,7 +533,7 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
         // socket of a persistent client it destroys to the pool. It reconnects a failed client just to close it, so one is left alone.
         // With phpredis pooling off, PHP shares one persistent stream between the clients that name the same persistent_id, so
         // that stream stays open for the others, and the rebuild takes a socket of its own instead of the same stream back.
-        $sharesStream = $previous->isConnected() && (bool) ($this->config['persistent'] ?? false) && ! ResilientPhpRedisConnector::poolsPersistentSockets();
+        $sharesStream = $previous->isConnected() && $this->persistent && ! ResilientPhpRedisConnector::poolsPersistentSockets();
 
         if ($previous->isConnected() && ! $sharesStream) {
             rescue(fn (): bool => $previous->close(), null, false);

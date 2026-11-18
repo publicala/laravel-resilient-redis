@@ -19,15 +19,16 @@ use Publicala\ResilientRedis\Tests\Support\FakeRedisServer;
  *
  * @param  array<string, mixed>  $overrides
  * @param  list<object>  $reported
+ * @param  array<string, mixed>  $options  the global redis.options
  */
-function recoveringConnection(FakeRedisServer $server, array &$reported = [], array $overrides = []): ResilientPhpRedisConnection
+function recoveringConnection(FakeRedisServer $server, array &$reported = [], array $overrides = [], array $options = []): ResilientPhpRedisConnection
 {
     $connection = (new ResilientPhpRedisConnector(
         recoverLostConnections: true,
         report: function (object $event) use (&$reported): void {
             $reported[] = $event;
         },
-    ))->connect($server->config($overrides), []);
+    ))->connect($server->config($overrides), $options);
 
     $connection->setName('cache');
     $connection->setEventDispatcher(resolve(Dispatcher::class));
@@ -81,15 +82,21 @@ it('runs a read once more on a rebuilt client after a READONLY reply, which leav
         ->and($reported[0]->reason)->toBe('readonly_replica');
 });
 
-it('leaves open a persistent stream that phpredis pooling is off for, and rebuilds on a socket of its own', function (): void {
+it('leaves open a persistent stream that phpredis pooling is off for, and rebuilds on a socket of its own', function (string $where): void {
     $previous = ini_set('redis.pconnect.pooling_enabled', '0');
     // Both connections share one TCP connection, which turns read-only after the first connection's SET.
     $server = FakeRedisServer::start(["error-after:3:READONLY You can't write against a read only replica.", 'serve']);
-    $overrides = ['persistent' => true, 'persistent_id' => Str::random()];
+    $persistence = ['persistent' => true, 'persistent_id' => Str::random()];
+    $overrides = match ($where) {
+        'connection' => $persistence,
+        'connection options' => ['options' => $persistence],
+        'global options' => [],
+    };
+    $options = $where === 'global options' ? $persistence : [];
 
     try {
-        $connection = recoveringConnection($server, overrides: $overrides);
-        recoveringConnection($server, overrides: $overrides);
+        $connection = recoveringConnection($server, overrides: $overrides, options: $options);
+        recoveringConnection($server, overrides: $overrides, options: $options);
         $connection->set('greeting', 'hello');
 
         expect($connection->get('greeting'))->toBe('hello')
@@ -98,7 +105,7 @@ it('leaves open a persistent stream that phpredis pooling is off for, and rebuil
     } finally {
         ini_set('redis.pconnect.pooling_enabled', (string) $previous);
     }
-});
+})->with(['connection', 'connection options', 'global options']);
 
 it('runs a read once more on a rebuilt client after a protocol error, and closes the socket that went out of step', function (bool $persistent): void {
     $server = FakeRedisServer::start(['garbage-after:2', 'serve']);
