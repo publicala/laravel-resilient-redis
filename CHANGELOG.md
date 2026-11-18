@@ -13,6 +13,7 @@ The top `## ` header is always the most recent version (`## vX.Y.Z`, exact), and
 - **A temporary DNS failure is recognized on musl.** musl (Alpine) reports `EAI_AGAIN` as `Try again`, not as glibc's `Temporary failure in name resolution`, so the connect retry gave up on it. The text counts only at the end of a `getaddrinfo` message.
 - **More reads are replayed.** The range reads (`ZREVRANGE`, `ZRANGEBYSCORE`, `ZREVRANGEBYSCORE`, `ZRANGEBYLEX`, `ZREVRANGEBYLEX`), the samples (`ZRANDMEMBER`, `HRANDFIELD`), the set algebra that stores nothing (`ZDIFF`, `ZINTER`, `ZUNION`, `ZINTERCARD`, `SINTERCARD`), `LCS`, `OBJECT`, `EXPIRETIME`, `PEXPIRETIME`, the read-only `GEORADIUS` and `SORT` variants, `ECHO` and `LASTSAVE` now run once more after a lost connection, like the reads already listed.
 - **`Event::fake()` sees recovery events.** The events were dispatched through the dispatcher resolved when the first Redis connection was set up, so a dispatcher swapped in later, as `Event::fake()` does, never received them. The dispatcher is now resolved for each event.
+- **A server error reply is never read as a lost connection.** phpredis throws an error reply with the server's own text for any code but `ERR`, so a module or a script whose error mentioned `socket`, `went away` or `Connection lost` rebuilt the client and replayed the read. A `RedisException` that starts with an all-caps error code is now left alone, except `READONLY`.
 
 ## v3.0.3
 

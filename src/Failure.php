@@ -79,7 +79,7 @@ final class Failure
      */
     public static function lostConnectionReason(Throwable $e): ?string
     {
-        if (! self::isFromPhpRedis($e)) {
+        if (! self::isFromPhpRedis($e) || self::isServerErrorReply($e)) {
             return null;
         }
 
@@ -92,6 +92,18 @@ final class Failure
     public static function isLostTransactionState(Throwable $e): bool
     {
         return Str::contains($e->getMessage(), 'MULTI/watching mode');
+    }
+
+    /**
+     * Whether the exception carries an error reply from the server, which phpredis throws with the server's text
+     * for any code but ERR (a module's, or one a script returns). Its own socket messages never start with an
+     * all-caps code. READONLY is a reply too, from a primary demoted to replica, and stays a lost connection.
+     */
+    private static function isServerErrorReply(Throwable $e): bool
+    {
+        return $e instanceof RedisException
+            && preg_match('/^[A-Z][A-Z0-9_-]+ /', $e->getMessage()) === 1
+            && ! Str::startsWith($e->getMessage(), 'READONLY ');
     }
 
     private static function isFromPhpRedis(Throwable $e): bool
