@@ -400,6 +400,9 @@ it('keeps the read timeout a caller set at runtime when it rebuilds the client, 
 })->with([
     'a runtime timeout' => [['read_timeout' => 0.8], 0.09, 0.09],
     'the configured timeout' => [['read_timeout' => 0.8], null, 0.8],
+    // phpredis puts a zero read timeout on the socket as a poll that never waits, so every read fails at once, and its
+    // own reconnect skips zero as well. The rebuilt client goes back to the configured timeout, and the read succeeds.
+    'a runtime zero, which phpredis cannot read with' => [['read_timeout' => 0.8], 0.0, 0.8],
     'no timeout, so PHP default_socket_timeout' => [[], null, 0.0],
 ]);
 
