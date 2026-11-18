@@ -145,7 +145,7 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
      */
     protected function establishConnection(mixed $client, array $config): void
     {
-        $this->connecting = $client instanceof Redis ? $client : null;
+        $this->connecting = $client;
 
         parent::establishConnection($client, $config);
     }
