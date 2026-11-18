@@ -23,7 +23,7 @@ expect()->extend('toThrowLostConnection', fn () => $this->toThrow(
 
 /**
  * The exception as if the named calls had raised it, innermost first, which is how a failure tells the pooled-socket liveness check apart from AUTH or SELECT.
- * A frame is a phpredis method (`pconnect`) or a method of another class (`App\\Cache\\Pool::pconnect`), and no frames leave an empty trace.
+ * A frame is a phpredis method (`pconnect`) or a method of another class (`App\Cache\Pool::pconnect`), and no frames leave an empty trace.
  *
  * @template T of Throwable
  *
