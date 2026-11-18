@@ -383,6 +383,17 @@ it('selects again the database a raw SELECT switched to, which phpredis does not
     expect($server->commands())->toBe(['SELECT 0', 'SELECT 3', 'SELECT 3', 'GET greeting', 'SELECT 0', 'SELECT 3', 'GET greeting']);
 });
 
+it('ignores a raw SELECT the server refused', function (): void {
+    $server = FakeRedisServer::start(['serve:2', 'serve']);
+    $connection = recoveringConnection($server);
+
+    expect($connection->executeRaw(['SELECT', '99']))->toBeFalse();
+
+    $connection->get('greeting');
+
+    expect($server->commands())->toBe(['SELECT 0', 'SELECT 99', 'GET greeting', 'SELECT 0', 'GET greeting']);
+});
+
 it('ignores a SELECT the server refused', function (): void {
     $server = FakeRedisServer::start(['serve:2', 'serve']);
     $connection = recoveringConnection($server);
