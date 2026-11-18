@@ -10,6 +10,7 @@ use Illuminate\Support\Sleep;
 use Illuminate\Support\Str;
 use Publicala\ResilientRedis\Events\CommandRecovered;
 use Publicala\ResilientRedis\Events\RebuildFailed;
+use Publicala\ResilientRedis\LostWatchException;
 use Publicala\ResilientRedis\ResilientPhpRedisConnection;
 use Publicala\ResilientRedis\ResilientPhpRedisConnector;
 use Publicala\ResilientRedis\Tests\Support\FakeRedisServer;
@@ -620,6 +621,26 @@ it('stops a transaction whose MULTI loses the connection after a pipeline that m
     expect($ran)->toBeFalse()
         ->and($server->commands())->toBe(['SELECT 0', 'WATCH balance', 'MULTI', 'SELECT 0']);
 });
+
+it('stops a transaction after a read recovered on a rebuilt client, since a WATCH a pipeline sent died with the old socket', function (Closure $open): void {
+    // The callback receives phpredis's client, so a WATCH it sends never passes through the connection.
+    $server = FakeRedisServer::start(['serve:2', 'serve']);
+    $connection = recoveringConnection($server);
+    $connection->pipeline(fn (Redis $pipeline): Redis|bool => $pipeline->watch('balance'));
+
+    expect($connection->get('balance'))->toBeNull()
+        ->and(fn () => $open($connection))->toThrow(LostWatchException::class);
+
+    // The read ran again on the new socket, and nothing of the transaction reached it.
+    expect($server->commands())->toBe(['SELECT 0', 'WATCH balance', 'GET balance', 'SELECT 0', 'GET balance']);
+
+    // Once said, the next transaction runs, as it would after the caller sent its WATCH again.
+    expect($connection->transaction(fn (Redis $transaction): Redis|bool => $transaction->ping()))->toBe([true]);
+})->with([
+    'transaction()' => [fn (ResilientPhpRedisConnection $redis): Redis|array|false => $redis->transaction(fn (Redis $transaction): Redis|bool => $transaction->ping())],
+    'multi()' => [fn (ResilientPhpRedisConnection $redis): mixed => $redis->multi()],
+    'a raw MULTI' => [fn (ResilientPhpRedisConnection $redis): mixed => $redis->executeRaw(['MULTI'])],
+]);
 
 it('runs a transaction once more after MULTI loses its connection when a transaction ended every WATCH since the last pipeline', function (): void {
     $server = FakeRedisServer::start(['serve:5', 'serve']);

@@ -79,6 +79,12 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
     private bool $watchMayBeOpen = false;
 
     /**
+     * Whether a rebuild dropped a WATCH that may have been open without the caller hearing of it, so the next
+     * transaction would run without the check. Only a disconnect or a WATCH or UNWATCH through the connection clears it.
+     */
+    private bool $watchMayBeLost = false;
+
+    /**
      * Whether a raw MULTI opened a transaction that phpredis does not know about, so commands only queue.
      */
     private bool $inRawTransaction = false;
@@ -117,6 +123,8 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
      */
     public function command($method, array $parameters = []): mixed
     {
+        $this->refuseTransactionAfterLostWatch(mb_strtolower($method), $parameters);
+
         $retries = in_array(mb_strtolower($method), self::RETRYABLE_READS, true) ? 1 : 0;
         $firstAttemptAt = microtime(true);
         $reason = null;
@@ -196,6 +204,8 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
      */
     public function transaction(?callable $callback = null): Redis|array|false
     {
+        $this->refuseTransactionAfterLostWatch('multi', []);
+
         $transaction = $this->openBatch(fn (): Redis|false => $this->client()->multi(), transaction: true);
 
         return $callback === null || $transaction === false ? $transaction : $this->executeBatch($transaction, $callback, transaction: true);
@@ -205,8 +215,9 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
     {
         parent::disconnect();
 
-        // Closing the socket ended any WATCH and transaction it held.
+        // Closing the socket ended any WATCH and transaction it held, and the caller knows it did.
         $this->resetSessionState();
+        $this->watchMayBeLost = false;
     }
 
     /**
@@ -241,6 +252,26 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
     }
 
     /**
+     * Refuse a MULTI, once, after a rebuild dropped a WATCH the caller may have sent through a pipeline.
+     *
+     * @param  array<int, mixed>  $parameters
+     *
+     * @throws LostWatchException
+     */
+    private function refuseTransactionAfterLostWatch(string $method, array $parameters): void
+    {
+        $opensTransaction = $method === 'multi' || ($method === 'rawcommand' && mb_strtolower((string) ($parameters[0] ?? '')) === 'multi');
+
+        if (! $this->watchMayBeLost || ! $opensTransaction) {
+            return;
+        }
+
+        $this->watchMayBeLost = false;
+
+        throw new LostWatchException;
+    }
+
+    /**
      * Rebuild the client when the failure was a lost connection, and return why, so the caller may retry.
      *
      * A failure while a WATCH is open is rethrown after the rebuild: the
@@ -256,10 +287,14 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
         throw_if($reason === null, $e);
 
         $watched = $this->watching || ($dependsOnWatch && $this->watchMayBeOpen) || Failure::isLostTransactionState($e);
+        $watchMayBeOpen = $this->watchMayBeOpen;
 
         $this->replaceClient($e);
 
         throw_if($watched, $e);
+
+        // The caller goes on as if nothing happened, so the next transaction says the watch is gone.
+        $this->watchMayBeLost = $this->watchMayBeLost || $watchMayBeOpen;
 
         return $reason;
     }
@@ -378,6 +413,7 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
         }
 
         $this->watching = $method === 'watch';
+        $this->watchMayBeLost = false;
     }
 
     /**
@@ -411,6 +447,7 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
 
         if (in_array($command, ['watch', 'unwatch'], true)) {
             $this->watching = $command === 'watch';
+            $this->watchMayBeLost = false;
         }
 
         if ($command === 'multi') {
