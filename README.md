@@ -25,18 +25,22 @@ Every connect Laravel's phpredis connector makes goes through the package: the f
 | `Connection refused`, a missing Unix socket | The server is restarting |
 | `Temporary failure in name resolution` | The resolver failed for now |
 
-In one 30-day production sample, all 18 requests whose connect failed on a pooled socket the server had dropped succeeded on the second attempt, 110–170 ms later.
-
 The forms above are matched by their message, so a lasting misconfiguration that produces one (a wrong port answers `Connection refused`) fails only after the retries: the time of two more attempts, plus at most 0.6 seconds of waiting between them.
 
 The package **never retries** these failures:
 
-- **A timeout.** A connect or TLS handshake that timed out means the server or the network is overloaded. Another attempt doubles the wait and adds a handshake to the pile.
-- **A stall.** A failure that took a second or more (a server that accepts the socket and never answers) would only stall again. A DNS failure is the exception: the resolver takes its own timeout to fail, so it may be retried whatever its duration, within the window below.
+- **A timeout.** A connect or TLS handshake that timed out may be lost packets, but it is also what an overloaded server or TLS frontend produces, and there another attempt doubles the wait and adds a handshake to the pile.
+- **A stall.** A failure that took a second or more (a server that accepts the socket and never answers) would only stall again. Two exceptions: a DNS failure, since the resolver takes its own timeout to fail, and a pooled socket whose server went silent (below). Both may be retried whatever their duration, within the window below.
 - **A configuration error.** Wrong credentials (`WRONGPASS`, `NOAUTH`), a certificate that does not verify, a server that does not speak TLS, a host name that does not exist.
 - **Anything else.** A failure the package cannot name is rethrown as is.
 
 No attempt starts 6 seconds or more after the first one began. A resolver that times out after 5 seconds gets one retry, a slower one gets none, and a resolver that fails fast gets up to two.
+
+### Retries a pooled socket whose server went silent
+
+phpredis checks a pooled (persistent) socket with an `ECHO` before it reuses it. When the server or something between vanished without closing the socket, nothing answers, and `pconnect()` throws `read error on connection` once `read_timeout` runs out. phpredis discards that socket, so the first attempt that fails this way gets one more attempt on a fresh socket, however long it took, within the same window. It is reported with the reason `stale_pooled_socket`. With a `read_timeout` of 5 seconds the retry starts about 5.2 seconds after the first attempt, and with one near or above 6 seconds there is none.
+
+The package tells this failure apart by where phpredis raised it: a fresh `pconnect()` sends no command, so a read error from `pconnect()` itself comes from the liveness check. A server that stalls on AUTH or SELECT raises it from `auth()` or `select()`, and is not retried. When the server itself has stopped answering, the fresh socket stalls on AUTH or SELECT too, so the connect fails after about two read timeouts instead of one.
 
 ### Gives every connection a connect timeout
 
@@ -111,8 +115,8 @@ A changed switch takes effect once the config cache is rebuilt and long-running 
 ### Recommended connection settings
 
 - **`timeout`**: keep it short (2 seconds). It bounds the TCP connect and the TLS handshake. It does not bound name resolution or the replies to AUTH and SELECT.
-- **`read_timeout`**: set one (for example 5 seconds) when a request has a hard deadline, such as Octane's `max_execution_time`, and the connection runs no blocking commands (`BLPOP` with a timeout, a queue with `block_for`). Without it, a reply that never comes waits for `default_socket_timeout`.
-- **`persistent`**: reusing sockets across requests saves a TLS handshake per request. A pooled socket the server dropped is the failure this package retries best.
+- **`read_timeout`**: set one (for example 5 seconds) when a request has a hard deadline, such as Octane's `max_execution_time`, and the connection runs no blocking commands (`BLPOP` with a timeout, a queue with `block_for`). Without it, a reply that never comes waits for `default_socket_timeout`. It also bounds phpredis's liveness check on a pooled socket, so keep it under the retry window (5.8 seconds or less with the default) for a silent pooled socket to get its retry.
+- **`persistent`**: reusing sockets across requests saves a TLS handshake per request. A pooled socket the server dropped is the failure this package retries best. One the server abandoned silently costs a `read_timeout` before its retry.
 
 ## Limits
 

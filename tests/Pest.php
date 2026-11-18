@@ -20,3 +20,19 @@ pest()
 expect()->extend('toThrowLostConnection', fn () => $this->toThrow(
     fn (RedisException $e) => expect(Failure::lostConnectionReason($e))->not->toBeNull(),
 ));
+
+/**
+ * The exception as if the named phpredis method had raised it, which is how a failure tells the pooled-socket liveness check apart from AUTH or SELECT.
+ *
+ * @template T of Throwable
+ *
+ * @param  T  $e
+ * @return T
+ */
+function raisedBy(Throwable $e, string $method): Throwable
+{
+    (new ReflectionProperty($e instanceof Exception ? Exception::class : Error::class, 'trace'))
+        ->setValue($e, [['class' => Redis::class, 'type' => '->', 'function' => $method]]);
+
+    return $e;
+}

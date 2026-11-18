@@ -43,6 +43,34 @@ it('does not retry a transient failure that took a second or more, because it st
         ->and($policy->retryReason(1, $stall, 1000))->toBeNull();
 });
 
+it('retries a stale pooled socket that stalled until the read timeout, on the first attempt only', function (): void {
+    $policy = new ConnectRetryPolicy(retries: 2, windowMilliseconds: 6000);
+    $stale = raisedBy(new RedisException('read error on connection to cache.example.com:6379'), 'pconnect');
+
+    expect($policy->retryReason(1, $stale, 5050))->toBe(Failure::STALE_POOLED_SOCKET)
+        ->and($policy->retryReason(2, $stale, 5050))->toBeNull();
+});
+
+it('keeps the fast reason and every retry for a stale pooled socket that failed fast', function (): void {
+    $policy = new ConnectRetryPolicy(retries: 2, windowMilliseconds: 6000);
+    $stale = raisedBy(new RedisException('read error on connection to cache.example.com:6379'), 'pconnect');
+
+    expect($policy->retryReason(1, $stale, 40))->toBe('read_error')
+        ->and($policy->retryReason(2, $stale, 40))->toBe('read_error');
+});
+
+it('does not retry a stale pooled socket when the connection turns the retry off', function (): void {
+    $policy = new ConnectRetryPolicy(retries: 0, windowMilliseconds: 6000);
+
+    expect($policy->retryReason(1, raisedBy(new RedisException('read error on connection to cache.example.com:6379'), 'pconnect'), 5050))->toBeNull();
+});
+
+it('does not retry a server that stalled on AUTH or SELECT', function (string $method): void {
+    $policy = new ConnectRetryPolicy(retries: 2, windowMilliseconds: 6000);
+
+    expect($policy->retryReason(1, raisedBy(new RedisException('read error on connection to cache.example.com:6379'), $method), 5050))->toBeNull();
+})->with(['auth', 'select']);
+
 it('retries a temporary DNS failure that took the resolver timeout', function (): void {
     $policy = new ConnectRetryPolicy(retries: 2, windowMilliseconds: 6000);
     $dns = new RedisException('php_network_getaddresses: getaddrinfo for cache.example.com failed: Temporary failure in name resolution');

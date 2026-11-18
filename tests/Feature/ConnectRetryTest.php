@@ -124,7 +124,7 @@ it('does not retry a reply that stalled for a second', function (): void {
     Sleep::assertNeverSlept();
 });
 
-it('does not retry a pooled socket whose server went silent, which stalls the liveness check until the read timeout', function (): void {
+it('retries a pooled socket whose server went silent, which stalls the liveness check until the read timeout', function (): void {
     // The first request's SELECT and GET are answered, then the server goes silent on that socket.
     $server = FakeRedisServer::start(['serve-then-stall:2', 'serve']);
     $reported = [];
@@ -132,18 +132,43 @@ it('does not retry a pooled socket whose server went silent, which stalls the li
 
     expect(connectorReportingTo($reported)->connect($config, [])->get('key'))->toBeNull();
 
-    // phpredis checks a pooled socket with an ECHO before reusing it, and the silent server never answers.
+    // phpredis checks a pooled socket with an ECHO before reusing it, the silent server never answers,
+    // and phpredis discards the socket, so the retry opens a fresh one.
+    expect(connectorReportingTo($reported)->connect($config, [])->get('key'))->toBeNull()
+        ->and($server->commands()[2])->toStartWith('ECHO')
+        ->and(array_slice($server->commands(), -2))->toBe(['SELECT 0', 'GET key']);
+    Sleep::assertSleptTimes(1);
+    expect($reported)->toHaveCount(1)
+        ->and($reported[0])->toBeInstanceOf(ConnectRecovered::class)
+        ->and($reported[0]->context())->toMatchArray(['persistent' => true, 'attempts' => 2, 'reason' => 'stale_pooled_socket']);
+});
+
+it('does not retry a silent pooled socket once the retry window has closed', function (): void {
+    $server = FakeRedisServer::start(['serve-then-stall:2', 'serve']);
+    $reported = [];
+    $config = $server->config(['persistent' => true, 'persistent_id' => Str::random(), 'read_timeout' => 1.05, 'connect_retry_window' => 1.0]);
+
+    connectorReportingTo($reported)->connect($config, [])->get('key');
+
     expect(fn (): PhpRedisConnection => connectorReportingTo($reported)->connect($config, []))
         ->toThrow(RedisException::class, 'read error on connection');
 
-    expect($server->commands())->toHaveCount(3)
-        ->and($server->commands()[2])->toStartWith('ECHO')
-        ->and($reported)->toBeEmpty();
+    expect($reported)->toBeEmpty();
     Sleep::assertNeverSlept();
+});
 
-    // phpredis discarded the silent socket, so the next connect opens a fresh one.
-    expect(connectorReportingTo($reported)->connect($config, [])->get('key'))->toBeNull()
-        ->and(array_slice($server->commands(), -2))->toBe(['SELECT 0', 'GET key']);
+it('does not retry a silent pooled socket when the connection turns the retry off', function (): void {
+    $server = FakeRedisServer::start(['serve-then-stall:2', 'serve']);
+    $reported = [];
+    $config = $server->config(['persistent' => true, 'persistent_id' => Str::random(), 'read_timeout' => 1.05, 'connect_retries' => 0]);
+
+    connectorReportingTo($reported)->connect($config, [])->get('key');
+
+    expect(fn (): PhpRedisConnection => connectorReportingTo($reported)->connect($config, []))
+        ->toThrow(RedisException::class, 'read error on connection');
+
+    expect($reported)->toBeEmpty();
+    Sleep::assertNeverSlept();
 });
 
 it('does not retry a fresh persistent connection whose server stalls on AUTH or SELECT', function (array $config, string $call): void {

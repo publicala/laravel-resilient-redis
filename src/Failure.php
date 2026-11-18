@@ -6,6 +6,7 @@ namespace Publicala\ResilientRedis;
 
 use ErrorException;
 use Illuminate\Support\Str;
+use Redis;
 use RedisException;
 use Throwable;
 
@@ -20,6 +21,8 @@ use Throwable;
 final class Failure
 {
     public const string TEMPORARY_DNS = 'dns_temporary_failure';
+
+    public const string STALE_POOLED_SOCKET = 'stale_pooled_socket';
 
     /**
      * Connect failures that end within milliseconds when a pooled socket or the server is briefly gone.
@@ -71,6 +74,23 @@ final class Failure
         }
 
         return self::reasonFor($e, self::FAST_CONNECT_FAILURES);
+    }
+
+    /**
+     * Whether a connect failed at the liveness check phpredis runs on a pooled socket.
+     *
+     * A fresh pconnect() opens the transport and sends no command, so a read error raised
+     * by pconnect() itself comes from the ECHO phpredis sends before it reuses a pooled
+     * socket. phpredis discards that socket, so another attempt takes a fresh one.
+     */
+    public static function isStalePooledSocket(Throwable $e): bool
+    {
+        $frame = $e->getTrace()[0] ?? [];
+
+        return $e instanceof RedisException
+            && Str::contains($e->getMessage(), 'read error on connection')
+            && ($frame['class'] ?? null) === Redis::class
+            && ($frame['function'] ?? null) === 'pconnect';
     }
 
     /**
