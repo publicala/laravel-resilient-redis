@@ -116,8 +116,9 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
                 $lastReason = $reason;
 
                 // The pool hands out its oldest socket first, and a server that dropped one silently usually dropped
-                // the others with it, so the retry opens a socket of its own. It closes when the client is destroyed.
-                if ($reason === Failure::STALE_POOLED_SOCKET) {
+                // the others with it, so a retry after a failed liveness check, fast or slow, opens a socket of its own.
+                // It closes when the client is destroyed.
+                if (Failure::isStalePooledSocket($e)) {
                     $attemptConfig['persistent'] = false;
                 }
 

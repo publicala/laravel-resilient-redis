@@ -177,8 +177,27 @@ it('retries a silent pooled socket on a socket of its own, since the others in t
     Sleep::assertSleptTimes(1);
 });
 
-it('retries a silent pooled socket that the second attempt takes, after a first attempt that failed fast', function (): void {
-    $server = FakeRedisServer::start(['serve-then-stall:2', 'serve-then-stall:2', 'serve']);
+it('retries a pooled socket whose liveness check failed fast on a socket of its own', function (): void {
+    $server = FakeRedisServer::start(['serve-then-stall:2', 'serve-then-stall:2', 'serve-then-stall:2', 'serve']);
+    $reported = [];
+    $config = $server->config(['persistent' => true, 'persistent_id' => Str::random(), 'read_timeout' => 0.1]);
+
+    // Three connections open at once leave three sockets in the pool, and the server then goes silent on all of them.
+    $connections = collect(range(1, 3))->map(fn (): PhpRedisConnection => connectorReportingTo($reported)->connect($config, []));
+    $connections->each(fn (PhpRedisConnection $connection): mixed => $connection->get('key'));
+    unset($connections);
+
+    // A tenth of a second is fast for the retry policy, which reports a plain read error.
+    expect(connectorReportingTo($reported)->connect($config, [])->get('key'))->toBeNull()
+        ->and(array_values(array_filter($server->commands(), fn (string $command): bool => str_starts_with($command, 'ECHO'))))->toHaveCount(1)
+        ->and($reported)->toHaveCount(1)
+        ->and($reported[0]->context())->toMatchArray(['attempts' => 2, 'reason' => 'read_error']);
+});
+
+it('retries a silent pooled socket that the second attempt takes, after a first attempt that failed fast on SELECT', function (): void {
+    // The first attempt takes a pooled socket that passes the liveness check and closes on the SELECT after it,
+    // and the second attempt takes the other pooled socket, which is silent.
+    $server = FakeRedisServer::start(['serve:3', 'serve-then-stall:2', 'serve']);
     $reported = [];
     $config = $server->config(['persistent' => true, 'persistent_id' => Str::random(), 'read_timeout' => 0.1]);
 
@@ -188,7 +207,7 @@ it('retries a silent pooled socket that the second attempt takes, after a first 
     $second->get('key');
     unset($first, $second);
 
-    // The clock measures the first attempt's liveness check as fast and the second one's as a stall.
+    // The clock measures the second attempt's liveness check as a stall.
     $readings = 0;
     $now = 0.0;
     $clock = function () use (&$readings, &$now): float {
