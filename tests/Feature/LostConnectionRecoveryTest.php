@@ -150,7 +150,7 @@ it('rebuilds the client but does not replay a read that waited out the read time
         ->and($reported)->toBeEmpty();
 });
 
-it('runs a read once more that waited out the read timeout on a socket that sat idle, since something between may have dropped it', function (): void {
+it('runs a read once more that waited out the read timeout on a socket that sat idle, since something between may have dropped it', function (Closure $local): void {
     // The connection sends no SELECT, so the server's silence meets the first command.
     $server = FakeRedisServer::start(['stall', 'serve']);
     $reported = [];
@@ -159,12 +159,19 @@ it('runs a read once more that waited out the read timeout on a socket that sat 
     // A worker that sent nothing for a minute, as a NAT or a load balancer forgets an idle connection.
     (fn (): float => $this->lastReplyAt -= 60)->call($connection);
 
+    // Work that never reaches the server says nothing about whether the socket still answers.
+    $local($connection);
+
     expect($connection->get('greeting'))->toBeNull()
         ->and($server->acceptedConnections())->toBe(2)
         ->and($server->commands())->toBe(['GET greeting'])
         ->and($reported)->toHaveCount(1)
         ->and($reported[0]->reason)->toBe('read_error');
-});
+})->with([
+    'nothing else' => [fn (ResilientPhpRedisConnection $redis): null => null],
+    'an option read' => [fn (ResilientPhpRedisConnection $redis): mixed => $redis->getOption(Redis::OPT_SERIALIZER)],
+    'an empty pipeline' => [fn (ResilientPhpRedisConnection $redis): Redis|array|false => $redis->pipeline(fn (): null => null)],
+]);
 
 it('rebuilds the client but never replays a write, because the server may already have run it', function (Closure $write, string $sent): void {
     $server = FakeRedisServer::start(['serve:1', 'serve']);
@@ -346,6 +353,7 @@ it('returns false when phpredis cannot open the batch', function (): void {
     $client = Mockery::mock(Redis::class);
     $client->shouldReceive('pipeline')->andReturnFalse();
     $client->shouldReceive('multi')->andReturnFalse();
+    $client->shouldReceive('getTransferredBytes')->andReturn([0, 0]);
     $connection = new ResilientPhpRedisConnection($client, null, []);
 
     expect($connection->pipeline(fn (): null => null))->toBeFalse()

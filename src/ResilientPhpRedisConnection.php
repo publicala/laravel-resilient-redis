@@ -105,6 +105,12 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
     private float $lastReplyAt;
 
     /**
+     * The bytes the current client had received when the server last answered, so work that never reached the server
+     * (an option read, an empty pipeline) is not taken for a reply.
+     */
+    private int $receivedBytes = 0;
+
+    /**
      * @param  Redis  $client
      * @param  array<string, mixed>  $config
      * @param  (Closure(object): void)|null  $report
@@ -114,7 +120,7 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
     {
         parent::__construct($client, $connector, $config);
 
-        $this->lastReplyAt = microtime(true);
+        $this->startReplyClock();
     }
 
     /**
@@ -163,10 +169,7 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
                 continue;
             }
 
-            // A command a pipeline queued got no reply yet.
-            if ($mode !== Redis::PIPELINE) {
-                $this->lastReplyAt = microtime(true);
-            }
+            $this->noteReply();
 
             $this->trackSessionState(mb_strtolower($method), $parameters, $result, $mode);
 
@@ -347,7 +350,7 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
 
             $executing = true;
             $result = $batch->exec();
-            $this->lastReplyAt = microtime(true);
+            $this->noteReply();
         } catch (Throwable $throwable) {
             // A rebuild inside the callback already reset the session state, which now belongs to the new client.
             if ($batch === $this->client) {
@@ -607,7 +610,29 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
         }
 
         $this->client = $client;
+        $this->startReplyClock();
+    }
+
+    /**
+     * Start counting from a client that just connected, whose connect the server answered.
+     */
+    private function startReplyClock(): void
+    {
         $this->lastReplyAt = microtime(true);
+        $this->receivedBytes = (int) $this->client->getTransferredBytes()[1];
+    }
+
+    /**
+     * Note the time when the current client received bytes since the last reply.
+     */
+    private function noteReply(): void
+    {
+        $received = (int) $this->client->getTransferredBytes()[1];
+
+        if ($received !== $this->receivedBytes) {
+            $this->receivedBytes = $received;
+            $this->lastReplyAt = microtime(true);
+        }
     }
 
     /**
