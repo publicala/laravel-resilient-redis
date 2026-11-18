@@ -155,7 +155,8 @@ it('retries a silent pooled socket only once, even when the retry takes a second
     $second->get('key');
     unset($first, $second);
 
-    expect(fn (): PhpRedisConnection => connectorReportingTo($reported)->connect($config, []))
+    $connector = connectorReportingTo($reported);
+    expect(fn (): PhpRedisConnection => $connector->connect($config, []))
         ->toThrow(RedisException::class, 'read error on connection');
 
     expect(array_values(array_filter($server->commands(), fn (string $command): bool => str_starts_with($command, 'ECHO'))))->toHaveCount(2)
@@ -170,7 +171,8 @@ it('does not retry a silent pooled socket once the retry window has closed', fun
 
     connectorReportingTo($reported)->connect($config, [])->get('key');
 
-    expect(fn (): PhpRedisConnection => connectorReportingTo($reported)->connect($config, []))
+    $connector = connectorReportingTo($reported);
+    expect(fn (): PhpRedisConnection => $connector->connect($config, []))
         ->toThrow(RedisException::class, 'read error on connection');
 
     expect($reported)->toBeEmpty();
@@ -184,7 +186,8 @@ it('does not retry a silent pooled socket when the connection turns the retry of
 
     connectorReportingTo($reported)->connect($config, [])->get('key');
 
-    expect(fn (): PhpRedisConnection => connectorReportingTo($reported)->connect($config, []))
+    $connector = connectorReportingTo($reported);
+    expect(fn (): PhpRedisConnection => $connector->connect($config, []))
         ->toThrow(RedisException::class, 'read error on connection');
 
     expect($reported)->toBeEmpty();
