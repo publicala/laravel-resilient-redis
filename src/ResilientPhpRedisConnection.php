@@ -51,6 +51,12 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
     ];
 
     /**
+     * How long a socket goes without a reply before a read that waits out its timeout on it is replayed. A NAT or a load
+     * balancer drops an idle connection without closing it, while a socket that answered a moment ago meets a stalling server.
+     */
+    private const float IDLE_SOCKET_SECONDS = 5.0;
+
+    /**
      * Whether the server holds a WATCH for this client, which a rebuilt client would not.
      */
     private bool $watching = false;
@@ -87,6 +93,11 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
     private bool $rawSelectQueued = false;
 
     /**
+     * When the server last answered on the current client, as a microtime.
+     */
+    private float $lastReplyAt;
+
+    /**
      * @param  Redis  $client
      * @param  array<string, mixed>  $config
      * @param  (Closure(object): void)|null  $report
@@ -94,6 +105,8 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
     public function __construct($client, ?callable $connector, array $config, private readonly ?Closure $report = null)
     {
         parent::__construct($client, $connector, $config);
+
+        $this->lastReplyAt = microtime(true);
     }
 
     /**
@@ -115,9 +128,11 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
             try {
                 $result = CommandForwarder::forward($this->client, $method, $parameters);
             } catch (Throwable $e) {
-                // A read that waited out its timeout met a server that is stalling, and running it again would double the wait.
-                // Measured before the listeners and the rebuild, whose own time says nothing about the server.
-                $stalled = (microtime(true) - $startedAt) * 1000 >= ConnectRetryPolicy::FAST_FAILURE_MILLISECONDS;
+                // A read that waited out its timeout on a socket that answered a moment ago met a server that is stalling,
+                // and running it again would double the wait. Measured before the listeners and the rebuild, whose own time
+                // says nothing about the server.
+                $stalled = (microtime(true) - $startedAt) * 1000 >= ConnectRetryPolicy::FAST_FAILURE_MILLISECONDS
+                    && $startedAt - $this->lastReplyAt < self::IDLE_SOCKET_SECONDS;
 
                 $this->dispatchCommandFailed($method, $parameters, $e);
 
@@ -134,6 +149,11 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
                 throw_if($batched || $stalled || $retries-- === 0, $e);
 
                 continue;
+            }
+
+            // A command a pipeline queued got no reply yet.
+            if ($mode !== Redis::PIPELINE) {
+                $this->lastReplyAt = microtime(true);
             }
 
             $this->trackSessionState(mb_strtolower($method), $parameters, $result, $mode);
@@ -285,6 +305,7 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
             }
 
             $result = $batch->exec();
+            $this->lastReplyAt = microtime(true);
         } catch (Throwable $throwable) {
             // A rebuild inside the callback already reset the session state, which now belongs to the new client.
             if ($batch === $this->client) {
@@ -535,6 +556,7 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
         }
 
         $this->client = $client;
+        $this->lastReplyAt = microtime(true);
     }
 
     /**

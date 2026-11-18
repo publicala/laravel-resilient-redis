@@ -126,7 +126,7 @@ it('gives up when the replayed read hits a protocol error too', function (): voi
         ->and($reported)->toBeEmpty();
 });
 
-it('rebuilds the client but does not replay a read that waited out the read timeout, since the server is stalling', function (): void {
+it('rebuilds the client but does not replay a read that waited out the read timeout on a socket that just answered, since the server is stalling', function (): void {
     // The connection sends no SELECT, so the server's silence meets the first command.
     $server = FakeRedisServer::start(['stall', 'serve']);
     $reported = [];
@@ -139,6 +139,22 @@ it('rebuilds the client but does not replay a read that waited out the read time
         ->and($server->acceptedConnections())->toBe(2)
         ->and($server->commands())->toBe(['PING'])
         ->and($reported)->toBeEmpty();
+});
+
+it('runs a read once more that waited out the read timeout on a socket that sat idle, since something between may have dropped it', function (): void {
+    // The connection sends no SELECT, so the server's silence meets the first command.
+    $server = FakeRedisServer::start(['stall', 'serve']);
+    $reported = [];
+    $connection = recoveringConnection($server, $reported, ['database' => null, 'read_timeout' => 1.0]);
+
+    // A worker that sent nothing for a minute, as a NAT or a load balancer forgets an idle connection.
+    (fn () => $this->lastReplyAt -= 60)->call($connection);
+
+    expect($connection->get('greeting'))->toBeNull()
+        ->and($server->acceptedConnections())->toBe(2)
+        ->and($server->commands())->toBe(['GET greeting'])
+        ->and($reported)->toHaveCount(1)
+        ->and($reported[0]->reason)->toBe('read_error');
 });
 
 it('rebuilds the client but never replays a write, because the server may already have run it', function (Closure $write, string $sent): void {
