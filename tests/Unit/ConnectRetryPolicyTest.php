@@ -43,12 +43,13 @@ it('does not retry a transient failure that took a second or more, because it st
         ->and($policy->retryReason(1, $stall, 1000))->toBeNull();
 });
 
-it('retries a stale pooled socket that stalled until the read timeout, on the first attempt only', function (): void {
+it('retries a stale pooled socket that stalled until the read timeout, on any attempt the connection allows', function (): void {
     $policy = new ConnectRetryPolicy(retries: 2, windowMilliseconds: 6000);
     $stale = raisedBy(new RedisException('read error on connection to cache.example.com:6379'), 'pconnect');
 
     expect($policy->retryReason(1, $stale, 5050))->toBe(Failure::STALE_POOLED_SOCKET)
-        ->and($policy->retryReason(2, $stale, 5050))->toBeNull();
+        ->and($policy->retryReason(2, $stale, 5050))->toBe(Failure::STALE_POOLED_SOCKET)
+        ->and($policy->retryReason(3, $stale, 5050))->toBeNull();
 });
 
 it('keeps the fast reason and every retry for a stale pooled socket that failed fast', function (): void {

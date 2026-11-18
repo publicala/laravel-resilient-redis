@@ -177,6 +177,30 @@ it('retries a silent pooled socket on a socket of its own, since the others in t
     Sleep::assertSleptTimes(1);
 });
 
+it('retries a silent pooled socket that the second attempt takes, after a first attempt that failed fast', function (): void {
+    $server = FakeRedisServer::start(['serve-then-stall:2', 'serve-then-stall:2', 'serve']);
+    $reported = [];
+    $config = $server->config(['persistent' => true, 'persistent_id' => Str::random(), 'read_timeout' => 0.1]);
+
+    $first = connectorReportingTo($reported)->connect($config, []);
+    $second = connectorReportingTo($reported)->connect($config, []);
+    $first->get('key');
+    $second->get('key');
+    unset($first, $second);
+
+    // The clock measures the first attempt's liveness check as fast and the second one's as a stall.
+    $readings = 0;
+    $now = 0.0;
+    $clock = function () use (&$readings, &$now): float {
+        return $now += ++$readings === 6 ? 1100.0 : 1.0;
+    };
+
+    expect(connectorReportingTo($reported, $clock)->connect($config, [])->get('key'))->toBeNull()
+        ->and($reported)->toHaveCount(1)
+        ->and($reported[0]->context())->toMatchArray(['persistent' => true, 'attempts' => 3, 'reason' => 'stale_pooled_socket']);
+    Sleep::assertSleptTimes(2);
+});
+
 it("retries a silent pooled socket only once, so a server that stopped answering fails on the retry's SELECT", function (): void {
     // Connection 2 is the replacement phpredis opens inside the failed pconnect(), and connection 3 is the retry's own.
     $server = FakeRedisServer::start(['serve-then-stall:2', 'stall', 'stall']);

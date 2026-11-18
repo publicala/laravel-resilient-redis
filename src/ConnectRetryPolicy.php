@@ -59,9 +59,9 @@ final readonly class ConnectRetryPolicy
             return $reason;
         }
 
-        // A silent pooled socket stalls the liveness check until read_timeout, and phpredis discards it.
-        // Only the first attempt gets this slow retry, so a pool of several silent sockets costs one more wait at most.
-        if ($attempt === 1 && Failure::isStalePooledSocket($e)) {
+        // A silent pooled socket stalls the liveness check until read_timeout. The retry connects without the pool,
+        // so it cannot meet another one, and a connect waits out one read_timeout this way at most.
+        if (Failure::isStalePooledSocket($e)) {
             return Failure::STALE_POOLED_SOCKET;
         }
 
