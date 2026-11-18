@@ -149,7 +149,7 @@ it('runs a read once more that waited out the read timeout on a socket that sat 
     $connection = recoveringConnection($server, $reported, ['database' => null, 'read_timeout' => 1.0]);
 
     // A worker that sent nothing for a minute, as a NAT or a load balancer forgets an idle connection.
-    (fn () => $this->lastReplyAt -= 60)->call($connection);
+    (fn (): float => $this->lastReplyAt -= 60)->call($connection);
 
     expect($connection->get('greeting'))->toBeNull()
         ->and($server->acceptedConnections())->toBe(2)
@@ -214,6 +214,7 @@ it('rethrows the command failure when the rebuild fails, since a lost write repl
         },
     );
     $connection->setName('cache');
+
     $handled = [];
     resolve(ExceptionHandler::class)->reportable(function (Throwable $e) use (&$handled): bool {
         $handled[] = $e->getMessage();
