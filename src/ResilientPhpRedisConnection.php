@@ -108,7 +108,7 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
      * The bytes the current client had received when the server last answered, so work that never reached the server
      * (an option read, an empty pipeline) is not taken for a reply.
      */
-    private int $receivedBytes = 0;
+    private int $receivedBytes;
 
     /**
      * @param  Redis  $client
