@@ -80,8 +80,9 @@ final class Failure
      * Whether a connect failed at the liveness check phpredis runs on a pooled socket.
      *
      * A fresh pconnect() opens the transport and sends no command, so a read error raised
-     * by pconnect() itself comes from the ECHO phpredis sends before it reuses a pooled
-     * socket. phpredis discards that socket, so another attempt takes a different one.
+     * by pconnect() itself comes from the check phpredis runs before it reuses a pooled
+     * socket: an ECHO, after an AUTH when the credentials sit in the stream context.
+     * phpredis discards that socket, so another attempt takes a different one.
      */
     public static function isStalePooledSocket(Throwable $e): bool
     {
