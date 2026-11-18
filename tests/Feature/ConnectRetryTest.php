@@ -478,3 +478,20 @@ it("bounds the AUTH phpredis sends while it closes a failed attempt's socket, so
         ->and($reported)->toHaveCount(1)
         ->and($reported[0]->reason)->toBe('stale_pooled_socket');
 });
+
+it("leaves open a failed attempt's socket whose AUTH the server refuses while it closes, and recovers", function (): void {
+    // Connection 2, the replacement phpredis opens inside the failed pconnect(), refuses the AUTH close() sends,
+    // so phpredis keeps it open and it gets its read timeout back before it can return to the pool.
+    $server = FakeRedisServer::start(['serve-then-stall:3', 'error:WRONGPASS invalid username-password pair or user is disabled.', 'serve'], tls: true);
+    $reported = [];
+    $config = $server->config(['persistent' => true, 'persistent_id' => Str::random(), 'read_timeout' => 0.1], tls: true);
+    $config['context']['auth'] = 'secret';
+
+    connectorReportingTo($reported)->connect($config, [])->get('key');
+
+    $connection = connectorReportingTo($reported, stallingClock(stalledReadings: 3))->connect($config, []);
+
+    expect($connection->get('key'))->toBeNull()
+        ->and($server->hungUp(2))->toBeFalse()
+        ->and($reported[0]->reason)->toBe('stale_pooled_socket');
+});
