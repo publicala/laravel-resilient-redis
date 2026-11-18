@@ -27,12 +27,14 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
      * @var list<string>
      */
     private const array RETRYABLE_READS = [
-        'bitcount', 'bitpos', 'dbsize', 'dump', 'exists', 'geodist', 'geohash', 'geopos', 'geosearch',
-        'get', 'getbit', 'getrange', 'hexists', 'hget', 'hgetall', 'hkeys', 'hlen', 'hmget', 'hstrlen',
-        'hvals', 'keys', 'lindex', 'llen', 'lpos', 'lrange', 'mget', 'ping', 'pttl', 'randomkey', 'scard',
-        'sdiff', 'sinter', 'sismember', 'smembers', 'smismember', 'srandmember', 'strlen', 'sunion', 'time',
-        'ttl', 'type', 'xinfo', 'xlen', 'xpending', 'xrange', 'xrevrange', 'zcard', 'zcount', 'zlexcount',
-        'zmscore', 'zrange', 'zrank', 'zrevrank', 'zscore',
+        'bitcount', 'bitpos', 'dbsize', 'dump', 'echo', 'exists', 'expiretime', 'geodist', 'geohash', 'geopos',
+        'georadius_ro', 'georadiusbymember_ro', 'geosearch', 'get', 'getbit', 'getrange', 'hexists', 'hget', 'hgetall',
+        'hkeys', 'hlen', 'hmget', 'hrandfield', 'hstrlen', 'hvals', 'keys', 'lastsave', 'lcs', 'lindex', 'llen', 'lpos',
+        'lrange', 'mget', 'object', 'pexpiretime', 'ping', 'pttl', 'randomkey', 'scard', 'sdiff', 'sinter',
+        'sintercard', 'sismember', 'smembers', 'smismember', 'sort_ro', 'srandmember', 'strlen', 'sunion', 'time',
+        'ttl', 'type', 'xinfo', 'xlen', 'xpending', 'xrange', 'xrevrange', 'zcard', 'zcount', 'zdiff', 'zinter',
+        'zintercard', 'zlexcount', 'zmscore', 'zrandmember', 'zrange', 'zrangebylex', 'zrangebyscore', 'zrank',
+        'zrevrange', 'zrevrangebylex', 'zrevrangebyscore', 'zrevrank', 'zscore', 'zunion',
     ];
 
     /**

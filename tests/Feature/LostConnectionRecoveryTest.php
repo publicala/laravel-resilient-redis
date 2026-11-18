@@ -51,6 +51,21 @@ it('runs a read once more on a rebuilt client when the server drops the connecti
     'pconnect' => true,
 ]);
 
+it('runs a read once more that reads a range or a sample', function (string $command, array $parameters, string $sent): void {
+    $server = FakeRedisServer::start(['serve:1', 'serve']);
+    $reported = [];
+    $connection = recoveringConnection($server, $reported);
+
+    $connection->command($command, $parameters);
+
+    expect($server->commands())->toBe(['SELECT 0', $sent, 'SELECT 0', $sent])
+        ->and($reported[0]->command)->toBe(mb_strtolower($command));
+})->with([
+    'zRevRange' => ['zRevRange', ['scores', 0, -1], 'ZREVRANGE scores 0 -1'],
+    'zRangeByLex' => ['zRangeByLex', ['names', '-', '+'], 'ZRANGEBYLEX names - +'],
+    'hRandField' => ['hRandField', ['profile'], 'HRANDFIELD profile'],
+]);
+
 it('runs a read once more on a rebuilt client after a READONLY reply, which leaves the old socket open', function (): void {
     $server = FakeRedisServer::start(["error-after:2:READONLY You can't write against a read only replica.", 'serve']);
     $reported = [];
