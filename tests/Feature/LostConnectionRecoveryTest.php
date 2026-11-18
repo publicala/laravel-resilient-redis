@@ -658,9 +658,10 @@ it('runs a read once more that failed fast even when the rebuild took longer tha
     $client = new Redis;
     $client->connect('127.0.0.1', $server->port, 1.0);
     $client->select(0);
+
     $connector = function () use ($server): Redis {
-        // A connect retry that waited out its backoff, measured on the real clock.
-        usleep(1_100_000);
+        // A connect retry that waited out its backoff, on the real clock, since the suite fakes Sleep.
+        time_nanosleep(1, 100_000_000);
         $client = new Redis;
         $client->connect('127.0.0.1', $server->port, 1.0);
 
