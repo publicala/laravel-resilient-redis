@@ -25,18 +25,28 @@ Every connect Laravel's phpredis connector makes goes through the package: the f
 | `Connection refused`, a missing Unix socket | The server is restarting |
 | `Temporary failure in name resolution` | The resolver failed for now |
 
-In one 30-day production sample, all 18 requests whose connect failed on a pooled socket the server had dropped succeeded on the second attempt, 110–170 ms later.
-
 The forms above are matched by their message, so a lasting misconfiguration that produces one (a wrong port answers `Connection refused`) fails only after the retries: the time of two more attempts, plus at most 0.6 seconds of waiting between them.
 
 The package **never retries** these failures:
 
-- **A timeout.** A connect or TLS handshake that timed out means the server or the network is overloaded. Another attempt doubles the wait and adds a handshake to the pile.
-- **A stall.** A failure that took a second or more (a server that accepts the socket and never answers) would only stall again. A DNS failure is the exception: the resolver takes its own timeout to fail, so it may be retried whatever its duration, within the window below.
+- **A timeout.** A connect or TLS handshake that timed out may be lost packets, but it is also what an overloaded server or TLS frontend produces, and there another attempt doubles the wait and adds a handshake to the pile.
+- **A stall.** A failure that took a second or more (a server that accepts the socket and never answers) would only stall again. Two exceptions: a DNS failure, since the resolver takes its own timeout to fail, and a pooled socket whose server went silent (below). Both may be retried whatever their duration, within the window below.
 - **A configuration error.** Wrong credentials (`WRONGPASS`, `NOAUTH`), a certificate that does not verify, a server that does not speak TLS, a host name that does not exist.
 - **Anything else.** A failure the package cannot name is rethrown as is.
 
 No attempt starts 6 seconds or more after the first one began. A resolver that times out after 5 seconds gets one retry, a slower one gets none, and a resolver that fails fast gets up to two.
+
+### Retries a pooled socket whose server went silent
+
+phpredis checks a pooled (persistent) socket with an `ECHO` before it reuses it, after an `AUTH` when the credentials sit in the stream context. When the server or something between vanished without closing the socket, nothing answers, and `pconnect()` throws `read error on connection` once the socket's read timeout runs out. When an attempt fails this way after a second or more, it gets one more attempt, without the pool, within the same window, and a recovery on that attempt is reported with the reason `stale_pooled_socket`. A recovery reports the failure just before the attempt that succeeded, so one that took a third attempt names that later failure instead. With a `read_timeout` of 5 seconds the retry starts about 5.2 seconds after the first attempt. The window is checked against the elapsed time plus the wait before the retry, so a `read_timeout` close to 6 seconds leaves no room for it. A pooled socket that fails faster keeps the fast rules above and its reason `read_error`, and its retry connects without the pool too.
+
+The retry opens a socket of its own instead of taking another from the pool. phpredis hands out its oldest pooled socket first, and a server that dropped one socket silently usually dropped the others with it. The retry's socket is not persistent and closes when the client is destroyed. The pool's other stale sockets stay in the pool, and a later connect that takes one waits a read timeout and retries the same way.
+
+The package tells this failure apart by where phpredis raised it: a fresh `pconnect()` sends no command, so a read error from `pconnect()` itself comes from the liveness check. A server that stalls on AUTH or SELECT on a fresh socket raises it from the call that sent the command (`auth()` or `select()`, which also sends the AUTH for credentials in the stream context), so that slow failure is not retried. When the server itself has stopped answering, the retry stalls on its first command too, so the connect fails after about two read timeouts instead of one. Laravel sends AUTH only with a `password`, SELECT only with a `database` and CLIENT SETNAME only with a `name`, so a connection with none of them connects on the retry's socket, and the stall surfaces on its next command.
+
+### Closes the socket a failed attempt leaves
+
+When a pooled socket fails its check, phpredis opens a replacement inside the same `pconnect()` and then throws, so the failed client holds a socket. The package closes it before the next attempt. Otherwise it would return to the pool when the client is destroyed, so every recovery would add a socket to the pool. A client whose connect failed outright holds no socket and is left alone. With phpredis pooling off (`redis.pconnect.pooling_enabled=0`), PHP shares one persistent stream between the clients that name the same `persistent_id`, so a persistent client's socket is left open. With credentials in the stream context, phpredis sends AUTH before it closes a socket, and the package gives that AUTH 0.1 seconds, so a socket that went silent does not hold the retry back.
 
 ### Gives every connection a connect timeout
 
@@ -68,7 +78,7 @@ redis.connect.recovered {"host":"tls://cache.example.com","port":6379,"database"
 redis.command.recovered {"connection":"cache","command":"get","milliseconds":12,"reason":"connection_reset"}
 ```
 
-The events carry a reason code, never the exception text, arguments or credentials. A failing listener is reported and never changes the outcome of the Redis call.
+The events carry a reason code, never the exception text, arguments or credentials. `persistent` is the connection's setting, also when a recovery connected on the retry's own socket. A failing listener is reported and never changes the outcome of the Redis call.
 
 ## Replacing a custom connector
 
@@ -111,8 +121,9 @@ A changed switch takes effect once the config cache is rebuilt and long-running 
 ### Recommended connection settings
 
 - **`timeout`**: keep it short (2 seconds). It bounds the TCP connect and the TLS handshake. It does not bound name resolution or the replies to AUTH and SELECT.
-- **`read_timeout`**: set one (for example 5 seconds) when a request has a hard deadline, such as Octane's `max_execution_time`, and the connection runs no blocking commands (`BLPOP` with a timeout, a queue with `block_for`). Without it, a reply that never comes waits for `default_socket_timeout`.
-- **`persistent`**: reusing sockets across requests saves a TLS handshake per request. A pooled socket the server dropped is the failure this package retries best.
+- **`read_timeout`**: set one (for example 5 seconds) when a request has a hard deadline, such as Octane's `max_execution_time`, and the connection runs no blocking commands (`BLPOP` with a timeout, a queue with `block_for`). Without it, a reply that never comes waits for `default_socket_timeout`. It also bounds phpredis's liveness check on a pooled socket the connection opened, so keep it well under the retry window (5 seconds with the default 6) for a silent pooled socket to get its retry.
+- **`persistent`**: reusing sockets across requests saves a TLS handshake per request. A pooled socket the server dropped is the failure this package retries best. One the server abandoned silently costs a read timeout before its retry.
+- **`redis.pconnect.pool_pattern`**: phpredis pools sockets by host and port, and a pooled socket keeps the read timeout last set on it. The liveness check runs before Laravel applies the connection's own `read_timeout`, so it waits the timeout of the connection that used the socket last, and a connection that sets no `read_timeout` keeps that timeout for its commands too. When connections on one server set different read timeouts (a queue connection with none waits `default_socket_timeout`, 60 seconds by default, and its blocking commands need no cut), set `redis.pconnect.pool_pattern=i` in `php.ini` and give each connection its own `persistent_id`, so each reuses only sockets it opened.
 
 ## Limits
 

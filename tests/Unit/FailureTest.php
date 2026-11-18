@@ -35,6 +35,24 @@ it('never retries a connect failure that is slow, deterministic or not from phpr
     'an exception from outside phpredis' => [new RuntimeException('Connection refused')],
 ]);
 
+it('recognizes a read error that the liveness check on a pooled socket raised inside pconnect', function (): void {
+    expect(Failure::isStalePooledSocket(raisedBy(new RedisException('read error on connection to tls://cache.example.com:6379'), 'pconnect')))->toBeTrue();
+});
+
+it('tells a stale pooled socket apart from other connect failures', function (Throwable $e): void {
+    expect(Failure::isStalePooledSocket($e))->toBeFalse();
+})->with([
+    'a server that stalls on AUTH' => [raisedBy(new RedisException('read error on connection to tls://cache.example.com:6379'), 'auth')],
+    'a server that stalls on SELECT' => [raisedBy(new RedisException('read error on connection to tls://cache.example.com:6379'), 'select')],
+    'a non-persistent connect' => [raisedBy(new RedisException('read error on connection to tls://cache.example.com:6379'), 'connect')],
+    'a read error raised outside phpredis' => [new RedisException('read error on connection to tls://cache.example.com:6379')],
+    'a timeout inside pconnect' => [raisedBy(new RedisException('Connection timed out'), 'pconnect')],
+    'a TLS warning inside pconnect' => [raisedBy(new ErrorException('Redis::pconnect(): SSL: Handshake timed out'), 'pconnect')],
+    'a read error with no trace' => [raisedBy(new RedisException('read error on connection to tls://cache.example.com:6379'))],
+    'a read error from another class named pconnect' => [raisedBy(new RedisException('read error on connection to tls://cache.example.com:6379'), 'App\\Cache\\Pool::pconnect')],
+    'a read error from AUTH called inside pconnect' => [raisedBy(new RedisException('read error on connection to tls://cache.example.com:6379'), 'auth', 'pconnect')],
+]);
+
 it('names a command failure that means a lost connection', function (Throwable $e, string $reason): void {
     expect(Failure::lostConnectionReason($e))->toBe($reason);
 })->with([

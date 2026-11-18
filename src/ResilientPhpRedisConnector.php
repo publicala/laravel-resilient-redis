@@ -29,6 +29,16 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
     public const float DEFAULT_TIMEOUT = 2.0;
 
     /**
+     * The read timeout, in seconds, for the AUTH phpredis may send while it closes a failed attempt's socket.
+     */
+    private const float CLOSE_READ_TIMEOUT = 0.1;
+
+    /**
+     * The client the attempt in progress connects, which Laravel's createClient() does not hand back when it throws.
+     */
+    private ?Redis $connecting = null;
+
+    /**
      * @param  bool  $recoverLostConnections  Return connections that rebuild a lost client and retry reads, in place of Laravel's own recovery.
      * @param  (Closure(object): void)|null  $report
      * @param  (Closure(): float)|null  $clock  Milliseconds on a monotonic clock.
@@ -79,6 +89,7 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
         $firstAttemptAt = $this->now();
         $lastFailure = null;
         $lastReason = null;
+        $attemptConfig = $config;
 
         for ($attempt = 1; ; $attempt++) {
             $attemptStartedAt = $this->now();
@@ -89,9 +100,12 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
             }
 
             try {
-                $client = parent::createClient($config);
+                $client = parent::createClient($attemptConfig);
             } catch (Throwable $e) {
-                $reason = $policy->retryReason($attempt, $e, $this->now() - $attemptStartedAt);
+                $failedAfter = $this->now() - $attemptStartedAt;
+                $this->closeFailedClient((bool) ($attemptConfig['persistent'] ?? false));
+
+                $reason = $policy->retryReason($attempt, $e, $failedAfter);
                 $delay = $reason === null ? null : $policy->backoffMilliseconds($attempt);
 
                 throw_if($delay === null || ! $policy->allowsAttemptAt($this->now() - $firstAttemptAt + $delay), $e);
@@ -101,7 +115,17 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
                 $lastFailure = $e;
                 $lastReason = $reason;
 
+                // The pool hands out its oldest socket first, and a server that dropped one silently usually dropped
+                // the others with it, so a retry after a failed liveness check, fast or slow, opens a socket of its own.
+                // It closes when the client is destroyed.
+                if (Failure::isStalePooledSocket($e)) {
+                    $attemptConfig['persistent'] = false;
+                }
+
                 continue;
+            } finally {
+                // The connector outlives its clients, and holding one would keep a pooled socket from its pool.
+                $this->connecting = null;
             }
 
             $this->reapplyNativeRetryOptions($client, $config);
@@ -119,6 +143,51 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
             }
 
             return $client;
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $config
+     */
+    protected function establishConnection(mixed $client, array $config): void
+    {
+        $this->connecting = $client;
+
+        parent::establishConnection($client, $config);
+    }
+
+    private function poolsPersistentSockets(): bool
+    {
+        return (int) ini_get('redis.pconnect.pooling_enabled') === 1;
+    }
+
+    /**
+     * Close the socket a failed attempt holds. A pooled socket that fails its liveness check makes phpredis
+     * open a replacement inside the same pconnect(), and a persistent client returns its socket to the pool
+     * when it is destroyed, so leaving it open would add a socket to the pool on every recovery.
+     * phpredis reconnects a failed client just to close it, so one without a socket is left alone.
+     */
+    private function closeFailedClient(bool $persistent): void
+    {
+        $client = $this->connecting;
+
+        // With phpredis pooling off, PHP shares one persistent stream between the clients that name the same persistent_id,
+        // so closing it would cut off a client that still uses it.
+        if (! $client instanceof Redis || ! $client->isConnected() || ($persistent && ! $this->poolsPersistentSockets())) {
+            return;
+        }
+
+        // With credentials in the stream context, phpredis sends AUTH before it closes the socket, and a socket that went
+        // silent would hold the retry for a whole read timeout.
+        $readTimeout = $client->getOption(Redis::OPT_READ_TIMEOUT);
+        $client->setOption(Redis::OPT_READ_TIMEOUT, self::CLOSE_READ_TIMEOUT);
+
+        rescue(fn (): bool => $client->close(), null, false);
+
+        // A socket whose AUTH was refused stays open and returns to the pool, so it gets its read timeout back. phpredis
+        // leaves a socket opened without one on PHP's default, which a read timeout of zero would turn off.
+        if ($client->isConnected()) {
+            $client->setOption(Redis::OPT_READ_TIMEOUT, $readTimeout > 0 ? $readTimeout : (float) ini_get('default_socket_timeout'));
         }
     }
 

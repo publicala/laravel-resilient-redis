@@ -18,5 +18,7 @@
     </source>
     <php>
         <env name="APP_ENV" value="testing"/>
+        <ini name="redis.pconnect.pooling_enabled" value="1"/>
+        <ini name="redis.pconnect.echo_check_liveness" value="1"/>
     </php>
 </phpunit>
