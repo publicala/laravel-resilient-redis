@@ -63,6 +63,17 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
     private bool $watchQueued = false;
 
     /**
+     * Whether a pipeline handed phpredis's client to a caller since the server last cleared every WATCH, so a WATCH may be open
+     * that never passed through the connection.
+     */
+    private bool $watchMayBeOpen = false;
+
+    /**
+     * Whether a raw MULTI opened a transaction that phpredis does not know about, so commands only queue.
+     */
+    private bool $inRawTransaction = false;
+
+    /**
      * @param  Redis  $client
      * @param  array<string, mixed>  $config
      * @param  (Closure(object): void)|null  $report
@@ -85,7 +96,7 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
         while (true) {
             // A command sent inside a MULTI or a pipeline only queues, and a rebuilt client would run it outside the batch.
             $mode = $this->client->getMode();
-            $batched = $mode !== Redis::ATOMIC;
+            $batched = $mode !== Redis::ATOMIC || $this->inRawTransaction;
             $startedAt = microtime(true);
 
             try {
@@ -125,7 +136,10 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
      */
     public function pipeline(?callable $callback = null): Redis|array|false
     {
-        $pipeline = $this->openBatch(fn (): Redis|false => $this->client()->pipeline());
+        $pipeline = $this->openBatch(fn (): Redis|false => $this->client()->pipeline(), transaction: false);
+
+        // The caller gets phpredis's client, through the callback or as the return value, and may send a WATCH on it.
+        $this->watchMayBeOpen = $this->watchMayBeOpen || $pipeline !== false;
 
         return $callback === null || $pipeline === false ? $pipeline : $this->executeBatch($pipeline, $callback, transaction: false);
     }
@@ -135,7 +149,7 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
      */
     public function transaction(?callable $callback = null): Redis|array|false
     {
-        $transaction = $this->openBatch(fn (): Redis|false => $this->client()->multi());
+        $transaction = $this->openBatch(fn (): Redis|false => $this->client()->multi(), transaction: true);
 
         return $callback === null || $transaction === false ? $transaction : $this->executeBatch($transaction, $callback, transaction: true);
     }
@@ -144,9 +158,8 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
     {
         parent::disconnect();
 
-        // Closing the socket ended any WATCH it held.
-        $this->watching = false;
-        $this->watchQueued = false;
+        // Closing the socket ended any WATCH and transaction it held.
+        $this->resetSessionState();
     }
 
     /**
@@ -177,13 +190,13 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
      *
      * @throws Throwable
      */
-    private function recoverFrom(Throwable $e): string
+    private function recoverFrom(Throwable $e, bool $dependsOnWatch = false): string
     {
         $reason = Failure::lostConnectionReason($e);
 
         throw_if($reason === null, $e);
 
-        $watched = $this->watching || Failure::isLostTransactionState($e);
+        $watched = $this->watching || ($dependsOnWatch && $this->watchMayBeOpen) || Failure::isLostTransactionState($e);
 
         $this->replaceClient($e);
 
@@ -194,17 +207,18 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
 
     /**
      * Open a pipeline or a MULTI, which sends nothing that could take effect, once more on a rebuilt client if the connection was lost.
+     * A MULTI is not opened again while a WATCH may be open, since the transaction depends on it.
      *
      * @param  Closure(): (Redis|false)  $open
      *
      * @throws Throwable
      */
-    private function openBatch(Closure $open): Redis|false
+    private function openBatch(Closure $open, bool $transaction): Redis|false
     {
         try {
             return $open();
         } catch (Throwable $throwable) {
-            $this->recoverFrom($throwable);
+            $this->recoverFrom($throwable, dependsOnWatch: $transaction);
         }
 
         try {
@@ -276,8 +290,8 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
      */
     private function trackSessionState(string $method, array $parameters, mixed $result, int $mode): void
     {
-        if ($method === 'rawcommand' && $mode === Redis::ATOMIC && $result !== false) {
-            $this->trackRawCommand($parameters);
+        if ($method === 'rawcommand' && $mode === Redis::ATOMIC) {
+            $this->trackRawCommand($parameters, $result);
         }
 
         $this->rememberDatabase();
@@ -309,9 +323,30 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
      *
      * @param  array<int, mixed>  $parameters
      */
-    private function trackRawCommand(array $parameters): void
+    private function trackRawCommand(array $parameters, mixed $result): void
     {
         $command = mb_strtolower((string) ($parameters[0] ?? ''));
+
+        // The server ends the transaction and every WATCH on EXEC and DISCARD, whatever they answer.
+        if (in_array($command, ['exec', 'discard'], true) && $this->inRawTransaction) {
+            $this->inRawTransaction = false;
+            $this->settleBatch(closesWatch: true);
+
+            return;
+        }
+
+        // Inside a raw transaction a command only queues, and the server refuses what it cannot queue with false.
+        if ($result === false || $this->inRawTransaction) {
+            return;
+        }
+
+        if (in_array($command, ['watch', 'unwatch'], true)) {
+            $this->watching = $command === 'watch';
+        }
+
+        if ($command === 'multi') {
+            $this->inRawTransaction = true;
+        }
 
         // phpredis does not see a raw SELECT, so it keeps reporting the old database and reconnects to it.
         // Selecting through phpredis again puts the database in its own state.
@@ -331,6 +366,7 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
     {
         $this->watching = ($this->watching || $this->watchQueued) && ! $closesWatch;
         $this->watchQueued = false;
+        $this->watchMayBeOpen = $this->watchMayBeOpen && ! $closesWatch;
 
         $this->rememberDatabase();
     }
@@ -368,8 +404,7 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
             rescue(fn (): bool => $previous->close(), null, false);
         }
 
-        $this->watching = false;
-        $this->watchQueued = false;
+        $this->resetSessionState();
 
         try {
             $client = call_user_func($this->connector);
@@ -384,6 +419,17 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
         }
 
         $this->client = $client;
+    }
+
+    /**
+     * Forget the WATCH and transaction state of a socket that is gone.
+     */
+    private function resetSessionState(): void
+    {
+        $this->watching = false;
+        $this->watchQueued = false;
+        $this->watchMayBeOpen = false;
+        $this->inRawTransaction = false;
     }
 
     /**

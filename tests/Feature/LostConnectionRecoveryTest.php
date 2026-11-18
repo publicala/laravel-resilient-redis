@@ -435,6 +435,63 @@ it('counts a WATCH a pipeline sent through the connection once the pipeline runs
     expect($server->commands())->toBe(['SELECT 0', 'WATCH balance', 'GET balance', 'SELECT 0']);
 });
 
+it('never replays a read while a raw WATCH is open', function (): void {
+    $server = FakeRedisServer::start(['serve:2', 'serve']);
+    $connection = recoveringConnection($server);
+    $connection->executeRaw(['WATCH', 'balance']);
+
+    expect(fn () => $connection->get('balance'))->toThrowLostConnection();
+
+    expect($server->commands())->toBe(['SELECT 0', 'WATCH balance', 'GET balance', 'SELECT 0']);
+});
+
+it('replays a read again once a raw EXEC ended the WATCH', function (): void {
+    $server = FakeRedisServer::start(['serve:4', 'serve']);
+    $connection = recoveringConnection($server);
+    $connection->executeRaw(['WATCH', 'balance']);
+    $connection->executeRaw(['MULTI']);
+    $connection->executeRaw(['EXEC']);
+
+    expect($connection->get('balance'))->toBeNull()
+        ->and(array_slice($server->commands(), -3))->toBe(['GET balance', 'SELECT 0', 'GET balance']);
+});
+
+it('never replays a read queued after a raw MULTI, since it would run outside the transaction', function (): void {
+    $server = FakeRedisServer::start(['serve:2', 'serve']);
+    $connection = recoveringConnection($server);
+    $connection->executeRaw(['MULTI']);
+
+    expect(fn () => $connection->get('balance'))->toThrowLostConnection();
+
+    expect($server->commands())->toBe(['SELECT 0', 'MULTI', 'GET balance', 'SELECT 0']);
+});
+
+it('stops a transaction whose MULTI loses the connection after a pipeline that may have sent a WATCH', function (): void {
+    // The callback receives phpredis's client, so a WATCH it sends never passes through the connection.
+    $server = FakeRedisServer::start(['serve:2', 'serve']);
+    $connection = recoveringConnection($server);
+    $connection->pipeline(fn (Redis $pipeline): Redis|bool => $pipeline->watch('balance'));
+    $ran = false;
+    $callback = function () use (&$ran): void {
+        $ran = true;
+    };
+
+    expect(fn (): Redis|array|false => $connection->transaction($callback))->toThrowLostConnection();
+
+    expect($ran)->toBeFalse()
+        ->and($server->commands())->toBe(['SELECT 0', 'WATCH balance', 'MULTI', 'SELECT 0']);
+});
+
+it('runs a transaction once more after MULTI loses its connection when a transaction ended every WATCH since the last pipeline', function (): void {
+    $server = FakeRedisServer::start(['serve:5', 'serve']);
+    $connection = recoveringConnection($server);
+    $connection->pipeline(fn (Redis $pipeline): Redis|bool => $pipeline->watch('balance'));
+    $connection->transaction(fn (Redis $transaction): Redis|bool => $transaction->get('balance'));
+
+    expect($connection->transaction(fn (Redis $transaction): Redis|bool => $transaction->get('balance')))->toBe([false])
+        ->and(array_slice($server->commands(), -5))->toBe(['MULTI', 'SELECT 0', 'MULTI', 'GET balance', 'EXEC']);
+});
+
 it('runs a read once more after a disconnect ended the WATCH', function (): void {
     $server = FakeRedisServer::start(['serve', 'close-on-first-read', 'serve']);
     $reported = [];
