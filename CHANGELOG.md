@@ -8,7 +8,9 @@ The top `## ` header is always the most recent version (`## vX.Y.Z`, exact), and
 
 ### Changed
 
-- **A pooled socket whose server went silent is retried once.** phpredis checks a pooled persistent socket with an `ECHO` before reusing it, and when nothing answers, `pconnect()` throws `read error on connection` after `read_timeout`, which the package declined as a stall. phpredis has already discarded that socket, so a first attempt that fails this way after a second or more now gets one more attempt, on another pooled socket or a fresh one, within the retry window, and a recovery on that attempt is reported with the reason `stale_pooled_socket`. A slow read error raised by `auth()` or `select()`, a server that stalls, is still not retried.
+- **A pooled socket whose server went silent is retried once, on a socket of its own.** phpredis checks a pooled persistent socket with an `ECHO` before reusing it, and when nothing answers, `pconnect()` throws `read error on connection` after the socket's read timeout, which the package declined as a stall. A first attempt that fails this way after a second or more now gets one more attempt within the retry window, and a recovery on that attempt is reported with the reason `stale_pooled_socket`. The retry connects without the pool, since the pool hands out its oldest socket first and a server that dropped one socket silently usually dropped the others. A slow read error raised by `auth()` or `select()`, a server that stalls, is still not retried.
+- **A failed connect attempt's socket is closed.** A pooled socket that fails its check makes phpredis open a replacement inside the same `pconnect()`. That socket used to return to the pool, so each recovery added one, or the retry took it back, depending on `zend.exception_ignore_args`.
+- **The README recommends `redis.pconnect.pool_pattern=i`** for connections on one server that set different read timeouts, since a pooled socket keeps the read timeout of the connection that opened it.
 - **The README no longer claims that 18 requests succeeded on a retried connect.** Those reconnects succeeded, but the requests behind them still failed.
 
 ## v3.0.3
