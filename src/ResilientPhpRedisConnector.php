@@ -29,6 +29,11 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
     public const float DEFAULT_TIMEOUT = 2.0;
 
     /**
+     * The client the attempt in progress connects, which Laravel's createClient() does not hand back when it throws.
+     */
+    private ?Redis $connecting = null;
+
+    /**
      * @param  bool  $recoverLostConnections  Return connections that rebuild a lost client and retry reads, in place of Laravel's own recovery.
      * @param  (Closure(object): void)|null  $report
      * @param  (Closure(): float)|null  $clock  Milliseconds on a monotonic clock.
@@ -91,7 +96,10 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
             try {
                 $client = parent::createClient($config);
             } catch (Throwable $e) {
-                $reason = $policy->retryReason($attempt, $e, $this->now() - $attemptStartedAt);
+                $failedAfter = $this->now() - $attemptStartedAt;
+                $this->closeFailedClient();
+
+                $reason = $policy->retryReason($attempt, $e, $failedAfter);
                 $delay = $reason === null ? null : $policy->backoffMilliseconds($attempt);
 
                 throw_if($delay === null || ! $policy->allowsAttemptAt($this->now() - $firstAttemptAt + $delay), $e);
@@ -102,6 +110,9 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
                 $lastReason = $reason;
 
                 continue;
+            } finally {
+                // The connector outlives its clients, and holding one would keep a pooled socket from its pool.
+                $this->connecting = null;
             }
 
             $this->reapplyNativeRetryOptions($client, $config);
@@ -119,6 +130,31 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
             }
 
             return $client;
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $config
+     */
+    protected function establishConnection(mixed $client, array $config): void
+    {
+        $this->connecting = $client instanceof Redis ? $client : null;
+
+        parent::establishConnection($client, $config);
+    }
+
+    /**
+     * Close the socket a failed attempt holds. A pooled socket that fails its liveness check makes phpredis
+     * open a replacement inside the same pconnect(), and a persistent client returns its socket to the pool
+     * when it is destroyed, so leaving it open would add a socket to the pool on every recovery.
+     * phpredis reconnects a failed client just to close it, so one without a socket is left alone.
+     */
+    private function closeFailedClient(): void
+    {
+        $client = $this->connecting;
+
+        if ($client instanceof Redis && $client->isConnected()) {
+            rescue(fn (): bool => $client->close(), null, false);
         }
     }
 

@@ -363,3 +363,26 @@ it('reports whether this Laravel version recovers lost connections on its own', 
     expect(ResilientPhpRedisConnector::frameworkRecoversLostConnections())
         ->toBe(method_exists(PhpRedisConnection::class, 'isRetryable'));
 });
+
+it('closes the socket a failed attempt leaves, so a recovery adds none to the pool', function (string $ignoreArguments): void {
+    $previous = ini_set('zend.exception_ignore_args', $ignoreArguments);
+    $server = FakeRedisServer::start(['serve-then-stall:2', 'serve']);
+    $reported = [];
+    $config = $server->config(['persistent' => true, 'persistent_id' => Str::random(), 'read_timeout' => 0.1]);
+
+    try {
+        connectorReportingTo($reported)->connect($config, [])->get('key');
+
+        // phpredis opens connection 2 inside the pconnect() whose liveness check failed.
+        $connection = connectorReportingTo($reported, stallingClock())->connect($config, []);
+
+        expect($server->hungUp(2))->toBeTrue()
+            ->and($connection->get('key'))->toBeNull()
+            ->and($server->acceptedConnections())->toBe(3);
+    } finally {
+        ini_set('zend.exception_ignore_args', (string) $previous);
+    }
+})->with([
+    'a trace that keeps call arguments' => '0',
+    'a trace without call arguments' => '1',
+]);
