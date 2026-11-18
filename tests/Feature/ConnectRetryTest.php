@@ -177,7 +177,7 @@ it('retries a silent pooled socket on a socket of its own, since the others in t
     Sleep::assertSleptTimes(1);
 });
 
-it('retries a silent pooled socket only once, so a server that stopped answering fails on the retry\'s SELECT', function (): void {
+it("retries a silent pooled socket only once, so a server that stopped answering fails on the retry's SELECT", function (): void {
     // Connection 2 is the replacement phpredis opens inside the failed pconnect(), and connection 3 is the retry's own.
     $server = FakeRedisServer::start(['serve-then-stall:2', 'stall', 'stall']);
     $reported = [];
