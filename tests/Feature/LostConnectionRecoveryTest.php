@@ -690,6 +690,21 @@ it('never replays a read queued after a raw MULTI a pipeline sent, which leaves 
     expect($server->commands())->toBe(['SELECT 0', 'MULTI', 'GET balance', 'SELECT 0']);
 });
 
+it('forgets a raw MULTI a pipeline queued when its callback threw before the pipeline ran', function (): void {
+    $server = FakeRedisServer::start(['serve:1', 'serve']);
+    $connection = recoveringConnection($server);
+
+    expect(fn () => $connection->pipeline(function () use ($connection): never {
+        $connection->executeRaw(['MULTI']);
+
+        throw new RuntimeException('The caller gave up.');
+    }))->toThrow(RuntimeException::class, 'The caller gave up.');
+
+    // The server never saw the MULTI, so a read that loses its connection runs again.
+    expect($connection->get('greeting'))->toBeNull()
+        ->and($server->commands())->toBe(['SELECT 0', 'GET greeting', 'SELECT 0', 'GET greeting']);
+});
+
 it('keeps the last confirmed database when a pipeline that queued a raw SELECT loses its connection', function (): void {
     $server = FakeRedisServer::start(['serve:1', 'serve']);
     $connection = recoveringConnection($server);

@@ -333,6 +333,8 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
      */
     private function executeBatch(Redis $batch, callable $callback, bool $transaction): Redis|array|false
     {
+        $executing = false;
+
         try {
             $callback($batch);
 
@@ -341,6 +343,7 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
                 return false;
             }
 
+            $executing = true;
             $result = $batch->exec();
             $this->lastReplyAt = microtime(true);
         } catch (Throwable $throwable) {
@@ -348,6 +351,12 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
             if ($batch === $this->client) {
                 // Whether a queued raw SELECT ran is unknown, and asking would make phpredis reconnect a failed client.
                 $this->rawSelectQueued = false;
+
+                // A pipeline sends nothing before EXEC, so a raw MULTI or EXEC it queued never reached the server.
+                if (! $executing && $batch->getMode() === Redis::PIPELINE) {
+                    $this->queuedRawTransaction = null;
+                }
+
                 $this->settleBatch(closesWatch: false);
             }
 
