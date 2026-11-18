@@ -77,6 +77,16 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
     private bool $inRawTransaction = false;
 
     /**
+     * Whether the open batch queued a raw MULTI (true) or a raw EXEC or DISCARD (false) last, which settles the raw transaction once it runs.
+     */
+    private ?bool $queuedRawTransaction = null;
+
+    /**
+     * Whether the open batch queued a raw SELECT, which may change the database without phpredis knowing.
+     */
+    private bool $rawSelectQueued = false;
+
+    /**
      * @param  Redis  $client
      * @param  array<string, mixed>  $config
      * @param  (Closure(object): void)|null  $report
@@ -105,12 +115,19 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
             try {
                 $result = CommandForwarder::forward($this->client, $method, $parameters);
             } catch (Throwable $e) {
+                // A read that waited out its timeout met a server that is stalling, and running it again would double the wait.
+                // Measured before the listeners and the rebuild, whose own time says nothing about the server.
+                $stalled = (microtime(true) - $startedAt) * 1000 >= ConnectRetryPolicy::FAST_FAILURE_MILLISECONDS;
+
                 $this->dispatchCommandFailed($method, $parameters, $e);
 
-                $reason = $this->recoverFrom($e);
+                // The server ends a transaction on EXEC and DISCARD whatever they answer, an error reply phpredis throws included.
+                if (mb_strtolower($method) === 'rawcommand' && $mode === Redis::ATOMIC && $this->endsRawTransaction($parameters)) {
+                    $this->inRawTransaction = false;
+                    $this->settleBatch(closesWatch: true);
+                }
 
-                // A read that waited out its timeout met a server that is stalling, and running it again would double the wait.
-                $stalled = (microtime(true) - $startedAt) * 1000 >= ConnectRetryPolicy::FAST_FAILURE_MILLISECONDS;
+                $reason = $this->recoverFrom($e);
 
                 throw_if($batched || $stalled || $retries-- === 0, $e);
 
@@ -269,6 +286,8 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
         } catch (Throwable $throwable) {
             // A rebuild inside the callback already reset the session state, which now belongs to the new client.
             if ($batch === $this->client) {
+                // Whether a queued raw SELECT ran is unknown, and asking would make phpredis reconnect a failed client.
+                $this->rawSelectQueued = false;
                 $this->settleBatch(closesWatch: false);
             }
 
@@ -308,8 +327,8 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
      */
     private function trackSessionState(string $method, array $parameters, mixed $result, int $mode): void
     {
-        if ($method === 'rawcommand' && $mode === Redis::ATOMIC) {
-            $this->trackRawCommand($parameters, $result);
+        if ($method === 'rawcommand') {
+            $mode === Redis::ATOMIC ? $this->trackRawCommand($parameters, $result) : $this->trackQueuedRawCommand($parameters);
         }
 
         $this->rememberDatabase();
@@ -346,7 +365,7 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
         $command = mb_strtolower((string) ($parameters[0] ?? ''));
 
         // The server ends the transaction and every WATCH on EXEC and DISCARD, whatever they answer.
-        if (in_array($command, ['exec', 'discard'], true) && $this->inRawTransaction) {
+        if ($this->endsRawTransaction($parameters)) {
             $this->inRawTransaction = false;
             $this->settleBatch(closesWatch: true);
 
@@ -374,6 +393,53 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
     }
 
     /**
+     * Note a raw command a pipeline or a MULTI queued, whose effect is known only once the batch runs.
+     *
+     * @param  array<int, mixed>  $parameters
+     */
+    private function trackQueuedRawCommand(array $parameters): void
+    {
+        $command = mb_strtolower((string) ($parameters[0] ?? ''));
+
+        $this->watchQueued = $this->watchQueued || $command === 'watch';
+        $this->rawSelectQueued = $this->rawSelectQueued || $command === 'select';
+
+        if (in_array($command, ['multi', 'exec', 'discard'], true)) {
+            $this->queuedRawTransaction = $command === 'multi';
+        }
+    }
+
+    /**
+     * Whether a raw command ends the raw transaction the connection has open.
+     *
+     * @param  array<int, mixed>  $parameters
+     */
+    private function endsRawTransaction(array $parameters): bool
+    {
+        return $this->inRawTransaction && in_array(mb_strtolower((string) ($parameters[0] ?? '')), ['exec', 'discard'], true);
+    }
+
+    /**
+     * Ask the server which database the connection is on, after a batch queued a raw SELECT phpredis did not see,
+     * and select it through phpredis, which puts it in phpredis's own state. A server older than CLIENT INFO keeps the old one.
+     */
+    private function followQueuedRawSelect(): void
+    {
+        // A transaction inside a pipeline settles while the pipeline still queues, and the pipeline settles after it.
+        if ($this->client->getMode() !== Redis::ATOMIC) {
+            return;
+        }
+
+        $this->rawSelectQueued = false;
+
+        $info = rescue(fn (): mixed => $this->client->rawCommand('CLIENT', 'INFO'), null, false);
+
+        if (is_string($info) && preg_match('/\bdb=(\d+)/', $info, $match) === 1 && (int) $match[1] !== $this->client->getDbNum()) {
+            rescue(fn (): bool => $this->client->select((int) $match[1]), false, false);
+        }
+    }
+
+    /**
      * Settle the WATCH state once a batch ends.
      *
      * A WATCH the batch queued counts as open whatever the outcome, since
@@ -385,6 +451,15 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
         $this->watching = ($this->watching || $this->watchQueued) && ! $closesWatch;
         $this->watchQueued = false;
         $this->watchMayBeOpen = $this->watchMayBeOpen && ! $closesWatch;
+
+        if ($this->queuedRawTransaction !== null) {
+            $this->inRawTransaction = $this->queuedRawTransaction;
+            $this->queuedRawTransaction = null;
+        }
+
+        if ($this->rawSelectQueued) {
+            $this->followQueuedRawSelect();
+        }
 
         $this->rememberDatabase();
     }
@@ -461,6 +536,8 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
         $this->watchQueued = false;
         $this->watchMayBeOpen = false;
         $this->inRawTransaction = false;
+        $this->queuedRawTransaction = null;
+        $this->rawSelectQueued = false;
     }
 
     /**
