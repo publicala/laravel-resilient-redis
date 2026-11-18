@@ -14,8 +14,10 @@ declare(strict_types=1);
  *   serve:N               answer N commands, then close the socket (FIN)
  *   serve-then-reset:N    answer N commands, then reset the socket (RST) when the next one arrives
  *   serve-rejecting:N:CMD answer N commands like serve:N, refusing CMD with a NOPERM error (phpredis throws)
+ *   serve-rejecting-slow:MS:CMD answer every command, refusing CMD at once like serve-rejecting and waiting MS milliseconds, during which the whole server waits, before every other reply
  *   serve-unknown:N:CMD   answer N commands like serve:N, answering CMD with "ERR unknown command" (phpredis returns false)
  *   serve-then-drop:N     answer N commands, then reset the idle socket before the next one is sent
+ *   serve-then-stall:N    answer N commands, then keep the socket open and never answer again
  *   reset                 reset (RST) right after accepting
  *   close-on-first-read   wait for the first bytes (a TLS ClientHello or a command), then close (FIN)
  *   reset-on-first-read   wait for the first bytes, then reset
@@ -164,6 +166,14 @@ while (true) {
 
             [$kind, $limit, $message] = array_pad(explode(':', $client['step'], 3), 3, null);
 
+            if ($kind === 'serve-rejecting-slow') {
+                [$kind, $delay, $limit] = ['serve-rejecting', (int) $limit, null];
+
+                if ($name !== $message) {
+                    usleep($delay * 1000);
+                }
+            }
+
             if ($kind === 'error' && $limit !== null && $message === null) {
                 [$message, $limit] = [$limit, 0];
             }
@@ -172,6 +182,14 @@ while (true) {
                 if (in_array($kind, ['serve', 'serve-rejecting', 'serve-unknown'], true)) {
                     fclose($stream);
                     unset($clients[(int) $stream]);
+
+                    continue 2;
+                }
+
+                // The socket stays open and nothing answers: a peer that vanished without a FIN or a RST.
+                if ($kind === 'serve-then-stall') {
+                    $client['step'] = 'stall';
+                    $record("stalled {$client['id']}");
 
                     continue 2;
                 }
@@ -302,6 +320,7 @@ function reply(string $name, array $arguments, array &$store): string
 {
     return match ($name) {
         'PING' => "+PONG\r\n",
+        'ECHO' => '$'.strlen($arguments[0])."\r\n{$arguments[0]}\r\n",
         'SELECT' => (int) $arguments[0] > 15 ? "-ERR DB index is out of range\r\n" : "+OK\r\n",
         'GET' => isset($store[$arguments[0]])
             ? '$'.strlen($store[$arguments[0]])."\r\n{$store[$arguments[0]]}\r\n"

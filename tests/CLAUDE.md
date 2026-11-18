@@ -12,8 +12,11 @@ Pest `it()` only. Every file declares `declare(strict_types=1)`.
 ## Traps
 
 - An arrow function captures by value. A closure built inside `fn () => ...` that uses `&$var` binds to the copy, so build connectors and callbacks outside `expect(fn () => ...)`.
-- phpredis pools persistent sockets by host and port, and fake servers reuse random ports. Give every persistent connection its own `persistent_id`.
+- Fake servers can reuse a port from an earlier test. With phpredis pooling on, the pool key is host and port unless `redis.pconnect.pool_pattern` includes `i`, so a caller's `persistent_id` keeps pools apart only then. With pooling off, PHP reuses one persistent stream for the same endpoint and `persistent_id`, so give every persistent connection its own `persistent_id` unless it must share. `phpunit.xml.dist` pins pooling and the liveness check on.
+- phpredis checks a pooled socket with an `ECHO` before reusing it, and opens a replacement socket after the check fails, so accepted connections can exceed attempts. Assert the commands the server received.
+- With `zend.exception_ignore_args` off (PHP's built-in default), an exception's trace keeps the objects passed to the calls it records alive, so a failed `Redis` client outlives its connect. Run a test that depends on when a client is destroyed under both settings.
 - phpredis reconnects an idle socket it finds closed (`max_retries`, 10 by default), and `close()` on a failed client reconnects it first. Count accepted connections, not assumptions.
+- PHP 8.3.6 peeks at a TLS stream on a blocking socket when phpredis checks it before a write, so a TLS 1.3 session ticket that arrives alone can hang a TLS test there. Later patch releases peek without blocking. Run the TLS tests on a current patch release.
 - `throw_unless()` and `throw_if()` evaluate their message arguments eagerly.
 - `->not->toThrow(Throwable::class)` passes even when the callback throws: Pest reads an interface name as message text. To assert that nothing escapes, call the code directly and assert its effect.
 

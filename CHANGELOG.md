@@ -19,6 +19,15 @@ The top `## ` header is always the most recent version (`## vX.Y.Z`, exact), and
 - **A read that waited out its read timeout is not replayed.** The server is stalling, so running the read again doubled the wait before the request failed. The client is still rebuilt. A read that fails within a second is replayed as before, however long the rebuild takes.
 - **A failed rebuild is reported.** When the rebuild after a lost connection failed, the command's own error was rethrown and the rebuild's error was dropped, which hid why the client could not reconnect (a refused AUTH, a DNS failure). It now goes to the exception handler, and the command's error is still the one rethrown.
 
+## v3.1.0
+
+### Changed
+
+- **A pooled socket whose server went silent is retried once, on a socket of its own.** phpredis checks a pooled persistent socket with an `ECHO` before reusing it, and when nothing answers, `pconnect()` throws `read error on connection` after the socket's read timeout, which the package declined as a stall. A persistent attempt that fails this way after a second or more now gets one more attempt within the retry window, and a recovery on that attempt is reported with the reason `stale_pooled_socket`. Any retry after a failed liveness check, fast or slow, connects without the pool, since the pool hands out its oldest socket first and a server that dropped one socket silently usually dropped the others. A slow read error raised by `auth()` or `select()`, a server that stalls, is still not retried.
+- **A failed connect attempt's socket is closed.** A pooled socket that fails its check makes phpredis open a replacement inside the same `pconnect()`. That socket used to return to the pool, so each recovery added one, or the retry took it back, depending on `zend.exception_ignore_args`. A persistent stream that phpredis pooling is off for may be shared, so it is left open, and the AUTH phpredis sends while closing with credentials in the stream context gets 0.1 seconds.
+- **The README recommends `redis.pconnect.pool_pattern=i`** for connections on one server that set different read timeouts, since a pooled socket keeps the read timeout last set on it, and the liveness check runs before Laravel applies the connection's own.
+- **The README no longer claims that 18 requests succeeded on a retried connect.** Those reconnects succeeded, but the requests behind them still failed.
+
 ## v3.0.3
 
 ### Changed

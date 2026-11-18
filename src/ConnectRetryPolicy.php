@@ -16,8 +16,8 @@ final readonly class ConnectRetryPolicy
     public const float DEFAULT_WINDOW_SECONDS = 6.0;
 
     /**
-     * Fast transient failures end within milliseconds, even on a saturated host. One
-     * that took longer is a stall, which another attempt would only repeat.
+     * Fast transient failures usually end within milliseconds. One that took
+     * longer is a stall, which another attempt would only repeat.
      */
     public const float FAST_FAILURE_MILLISECONDS = 1000.0;
 
@@ -57,6 +57,12 @@ final readonly class ConnectRetryPolicy
         // A resolver that times out takes its own timeout to fail, so a DNS failure is retried at any duration.
         if ($reason === Failure::TEMPORARY_DNS || $attemptMilliseconds < self::FAST_FAILURE_MILLISECONDS) {
             return $reason;
+        }
+
+        // A silent pooled socket stalls the liveness check until read_timeout. The retry connects without the pool,
+        // so it cannot meet another one, and a connect waits out one read_timeout this way at most.
+        if (Failure::isStalePooledSocket($e)) {
+            return Failure::STALE_POOLED_SOCKET;
         }
 
         return null;
