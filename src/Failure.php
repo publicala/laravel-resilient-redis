@@ -90,7 +90,7 @@ final class Failure
         return $e instanceof RedisException
             && Str::contains($e->getMessage(), 'read error on connection')
             && ($frame['class'] ?? null) === Redis::class
-            && ($frame['function'] ?? null) === 'pconnect';
+            && $frame['function'] === 'pconnect';
     }
 
     /**
