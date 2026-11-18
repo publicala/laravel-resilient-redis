@@ -79,6 +79,25 @@ it('runs a read once more on a rebuilt client after a READONLY reply, which leav
         ->and($reported[0]->reason)->toBe('readonly_replica');
 });
 
+it('leaves open a persistent stream that phpredis pooling is off for, and rebuilds on a socket of its own', function (): void {
+    $previous = ini_set('redis.pconnect.pooling_enabled', '0');
+    // Both connections share one TCP connection, which turns read-only after the first connection's SET.
+    $server = FakeRedisServer::start(["error-after:3:READONLY You can't write against a read only replica.", 'serve']);
+    $overrides = ['persistent' => true, 'persistent_id' => Str::random()];
+
+    try {
+        $connection = recoveringConnection($server, overrides: $overrides);
+        recoveringConnection($server, overrides: $overrides);
+        $connection->set('greeting', 'hello');
+
+        expect($connection->get('greeting'))->toBe('hello')
+            ->and($server->acceptedConnections())->toBe(2)
+            ->and($server->hungUp(1))->toBeFalse();
+    } finally {
+        ini_set('redis.pconnect.pooling_enabled', (string) $previous);
+    }
+});
+
 it('runs a read once more on a rebuilt client after a protocol error, and closes the socket that went out of step', function (bool $persistent): void {
     $server = FakeRedisServer::start(['garbage-after:2', 'serve']);
     $reported = [];

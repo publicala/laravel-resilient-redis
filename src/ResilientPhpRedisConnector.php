@@ -64,7 +64,9 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
             $formattedOptions['prefix'] = $config['prefix'];
         }
 
-        $connector = fn (): Redis => $this->createClient(array_merge($config, $options, $formattedOptions));
+        // The connection rebuilds through the same closure, and asks for a socket of its own when it cannot close the old one.
+        /** @param array<string, mixed> $overrides */
+        $connector = fn (array $overrides = []): Redis => $this->createClient(array_merge($config, $options, $formattedOptions, $overrides));
 
         return new ResilientPhpRedisConnection($connector(), $connector, $config, $this->report);
     }

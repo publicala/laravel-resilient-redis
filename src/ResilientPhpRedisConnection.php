@@ -402,14 +402,18 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
 
         // A client that still holds its socket (a READONLY reply, a reply stream out of step) is closed: phpredis returns the
         // socket of a persistent client it destroys to the pool. It reconnects a failed client just to close it, so one is left alone.
-        if ($previous->isConnected()) {
+        // With phpredis pooling off, PHP shares one persistent stream between the clients that name the same persistent_id, so
+        // that stream stays open for the others, and the rebuild takes a socket of its own instead of the same stream back.
+        $sharesStream = $previous->isConnected() && (bool) ($this->config['persistent'] ?? false) && (int) ini_get('redis.pconnect.pooling_enabled') !== 1;
+
+        if ($previous->isConnected() && ! $sharesStream) {
             rescue(fn (): bool => $previous->close(), null, false);
         }
 
         $this->resetSessionState();
 
         try {
-            $client = call_user_func($this->connector);
+            $client = call_user_func($this->connector, $sharesStream ? ['persistent' => false] : []);
 
             $options->each(fn (mixed $value, int $option): bool => $client->getOption($option) === $value || $client->setOption($option, $value));
 

@@ -53,7 +53,7 @@ Laravel 13.28 and later rebuild a phpredis client that loses its connection mid-
 
 TLS resets that phpredis reports as a PHP warning (`Redis::get(): SSL: Connection reset by peer`) count as a lost connection, as they do on Laravel 13.31 and later.
 
-A protocol error (`protocol error, got 'X' as reply type byte`) counts as a lost connection too. phpredis raises it when the reply stream goes out of step, typically when the connection breaks mid-reply, and it leaves the socket open. A connect that fails this way is not retried, since a server that does not speak Redis answers the same.
+A protocol error (`protocol error, got 'X' as reply type byte`) counts as a lost connection too. phpredis raises it when the reply stream goes out of step, typically when the connection breaks mid-reply, and it leaves the socket open. The package closes a socket left open this way, except a persistent stream that other clients share because phpredis pooling is off: that one stays open, and the rebuilt client connects on a socket of its own. A connect that fails this way is not retried, since a server that does not speak Redis answers the same.
 
 A lost client that still holds its socket is closed before it is replaced. Otherwise phpredis returns a persistent client's socket to its pool, where the next connect would reuse it.
 
