@@ -96,10 +96,10 @@ it('logs one warning per recovered connect or read, and per failed rebuild', fun
 ]);
 
 it('dispatches through the event dispatcher a test faked after the connections were set up', function (): void {
-    resolve(RecoveryEvents::class);
+    $events = resolve(RecoveryEvents::class);
     Event::fake([ConnectRecovered::class]);
 
-    resolve(RecoveryEvents::class)->dispatch(new ConnectRecovered('127.0.0.1', 6379, 0, false, 2, 140, 'read_error'));
+    $events->dispatch(new ConnectRecovered('127.0.0.1', 6379, 0, false, 2, 140, 'read_error'));
 
     Event::assertDispatched(ConnectRecovered::class);
 });
