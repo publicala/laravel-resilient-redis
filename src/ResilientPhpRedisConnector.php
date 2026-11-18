@@ -183,9 +183,10 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
 
         rescue(fn (): bool => $client->close(), null, false);
 
-        // A socket whose AUTH was refused stays open and returns to the pool, so it gets its read timeout back.
+        // A socket whose AUTH was refused stays open and returns to the pool, so it gets its read timeout back. phpredis
+        // leaves a socket opened without one on PHP's default, which a read timeout of zero would turn off.
         if ($client->isConnected()) {
-            $client->setOption(Redis::OPT_READ_TIMEOUT, $readTimeout);
+            $client->setOption(Redis::OPT_READ_TIMEOUT, $readTimeout > 0 ? $readTimeout : (float) ini_get('default_socket_timeout'));
         }
     }
 

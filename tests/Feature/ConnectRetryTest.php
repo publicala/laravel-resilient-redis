@@ -519,3 +519,30 @@ it("leaves open a failed attempt's socket whose AUTH the server refuses while it
         ->and($server->hungUp(2))->toBeFalse()
         ->and($reported[0]->reason)->toBe('stale_pooled_socket');
 });
+
+it("gives a failed attempt's socket that stays open the read timeout it had, so the next client's liveness check still times out", function (): void {
+    // Connection 1 goes silent after AUTH, SELECT and GET. Connection 2 is the replacement phpredis opens inside the failed
+    // pconnect(), with no read timeout of its own, so PHP's default_socket_timeout bounds its reads. It refuses the AUTH
+    // close() sends, which keeps it open, and answers every later command a second and a half late.
+    $server = FakeRedisServer::start(['serve-then-stall:3', 'serve-rejecting-slow:1500:AUTH', 'serve'], tls: true);
+    $reported = [];
+    $config = $server->config(['persistent' => true, 'persistent_id' => Str::random(), 'read_timeout' => 0.1], tls: true);
+    $config['context']['auth'] = 'secret';
+    $defaultSocketTimeout = ini_set('default_socket_timeout', '1');
+
+    try {
+        connectorReportingTo($reported)->connect($config, [])->get('key');
+        unset($config['read_timeout']);
+        connectorReportingTo($reported, stallingClock(stalledReadings: 3))->connect($config, [])->get('key');
+
+        // A client without credentials pops connection 2 and sends only the ECHO, which times out after a second.
+        unset($config['context']['auth']);
+        connectorReportingTo($reported)->connect($config, [])->get('key');
+    } finally {
+        ini_set('default_socket_timeout', (string) $defaultSocketTimeout);
+    }
+
+    expect($server->acceptedConnections())->toBe(5)
+        ->and($reported)->toHaveCount(2)
+        ->and($reported[1]->reason)->toBe('stale_pooled_socket');
+});

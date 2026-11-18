@@ -16,6 +16,7 @@ Pest `it()` only. Every file declares `declare(strict_types=1)`.
 - phpredis checks a pooled socket with an `ECHO` before reusing it, and opens a replacement socket after the check fails, so accepted connections can exceed attempts. Assert the commands the server received.
 - With `zend.exception_ignore_args` off (PHP's built-in default), an exception's trace keeps the objects passed to the calls it records alive, so a failed `Redis` client outlives its connect. Run a test that depends on when a client is destroyed under both settings.
 - phpredis reconnects an idle socket it finds closed (`max_retries`, 10 by default), and `close()` on a failed client reconnects it first. Count accepted connections, not assumptions.
+- PHP 8.3.6 peeks at a TLS stream on a blocking socket when phpredis checks it before a write, so a TLS 1.3 session ticket that arrives alone can hang a TLS test there. Later patch releases peek without blocking. Run the TLS tests on a current patch release.
 - `throw_unless()` and `throw_if()` evaluate their message arguments eagerly.
 - `->not->toThrow(Throwable::class)` passes even when the callback throws: Pest reads an interface name as message text. To assert that nothing escapes, call the code directly and assert its effect.
 
