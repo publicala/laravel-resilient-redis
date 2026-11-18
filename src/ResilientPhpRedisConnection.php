@@ -109,7 +109,10 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
 
                 $reason = $this->recoverFrom($e);
 
-                throw_if($batched || $retries-- === 0, $e);
+                // A read that waited out its timeout met a server that is stalling, and running it again would double the wait.
+                $stalled = (microtime(true) - $startedAt) * 1000 >= ConnectRetryPolicy::FAST_FAILURE_MILLISECONDS;
+
+                throw_if($batched || $stalled || $retries-- === 0, $e);
 
                 continue;
             }
