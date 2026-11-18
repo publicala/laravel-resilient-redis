@@ -311,6 +311,7 @@ function reply(string $name, array $arguments, array &$store): string
 {
     return match ($name) {
         'PING' => "+PONG\r\n",
+        'ECHO' => '$'.strlen($arguments[0])."\r\n{$arguments[0]}\r\n",
         'SELECT' => (int) $arguments[0] > 15 ? "-ERR DB index is out of range\r\n" : "+OK\r\n",
         'GET' => isset($store[$arguments[0]])
             ? '$'.strlen($store[$arguments[0]])."\r\n{$store[$arguments[0]]}\r\n"
