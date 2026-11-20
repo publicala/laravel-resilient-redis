@@ -130,7 +130,7 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
      * connect checks it with an ECHO under the read timeout the socket went back with. On a socket the server
      * went silent on, that check would hold the connect for the whole read timeout. A second is long enough
      * for the retry policy to read the failed check as a stall, and the connector gives a socket it reuses
-     * its configured read timeout back.
+     * its configured read timeout back. A shorter read timeout stays, since the check would fail sooner.
      */
     public function __destruct()
     {
@@ -138,7 +138,14 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
             return;
         }
 
-        rescue(fn (): bool => $this->client->setOption(Redis::OPT_READ_TIMEOUT, ConnectRetryPolicy::FAST_FAILURE_MILLISECONDS / 1000), null, false);
+        $cap = ConnectRetryPolicy::FAST_FAILURE_MILLISECONDS / 1000;
+        $readTimeout = (float) $this->client->getOption(Redis::OPT_READ_TIMEOUT);
+
+        if ($readTimeout > 0 && $readTimeout <= $cap) {
+            return;
+        }
+
+        rescue(fn (): bool => $this->client->setOption(Redis::OPT_READ_TIMEOUT, $cap), null, false);
     }
 
     /**

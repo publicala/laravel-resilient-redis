@@ -583,3 +583,20 @@ it('waits about a second on a pooled socket whose server went silent, however lo
         ->and($reported)->toHaveCount(1)
         ->and($reported[0]->reason)->toBe('stale_pooled_socket');
 });
+
+it('keeps a read timeout under a second on a socket it returns to the pool', function (): void {
+    $server = FakeRedisServer::start(['serve-then-stall:2', 'serve']);
+    $reported = [];
+    $config = $server->config(['persistent' => true, 'persistent_id' => Str::random(), 'read_timeout' => 0.1]);
+
+    connectorReportingTo($reported, recoverLostConnections: true)->connect($config, [])->get('key');
+
+    $startedAt = hrtime(true);
+    $connection = connectorReportingTo($reported, recoverLostConnections: true)->connect($config, []);
+
+    // The liveness check fails after a tenth of a second, fast for the retry policy, which reports a plain read error.
+    expect($connection->get('key'))->toBeNull()
+        ->and((hrtime(true) - $startedAt) / 1e6)->toBeLessThan(800.0)
+        ->and($reported)->toHaveCount(1)
+        ->and($reported[0]->reason)->toBe('read_error');
+});
