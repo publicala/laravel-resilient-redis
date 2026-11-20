@@ -43,7 +43,7 @@ jobs:
           php-version: '8.4'
           coverage: pcov
 
-      - run: php -r 'echo "phpredis ", phpversion("redis"), PHP_EOL;'
+      - run: php -r 'echo "PHP ", PHP_VERSION, ", phpredis ", phpversion("redis"), PHP_EOL;'
 
       - run: composer update --no-interaction --prefer-dist
 
@@ -141,8 +141,10 @@ jobs:
           php-version: '8.3'
           extensions: redis-6.0.1, sockets, pcntl
           coverage: none
+          # The runner image ships PHP 8.3.6, whose blocking TLS peek can hang a TLS test until the job times out.
+          update: true
 
-      - run: php -r 'echo "phpredis ", phpversion("redis"), PHP_EOL;'
+      - run: php -r 'echo "PHP ", PHP_VERSION, ", phpredis ", phpversion("redis"), PHP_EOL;'
 
       - name: Install dependencies
         run: |
