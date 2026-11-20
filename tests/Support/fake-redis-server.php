@@ -15,6 +15,7 @@ declare(strict_types=1);
  *   serve-then-reset:N    answer N commands, then reset the socket (RST) when the next one arrives
  *   serve-then-reset:N:MS like serve-then-reset:N, waiting MS milliseconds before the reset, during which the whole server waits
  *   serve-rejecting:N:CMD answer N commands like serve:N, refusing CMD with a NOPERM error (phpredis throws)
+ *   serve-slow:MS:CMD     answer every command, waiting MS milliseconds, during which the whole server waits, before the reply to CMD
  *   serve-rejecting-slow:MS:CMD answer every command, refusing CMD at once like serve-rejecting and waiting MS milliseconds, during which the whole server waits, before every other reply
  *   serve-unknown:N:CMD   answer N commands like serve:N, answering CMD with "ERR unknown command" (phpredis returns false)
  *   serve-then-drop:N     answer N commands, then reset the idle socket before the next one is sent
@@ -166,6 +167,14 @@ while (true) {
             $record('command '.implode(' ', array_map(fn (string $argument): string|false => str_contains($argument, ' ') ? json_encode($argument) : $argument, $arguments)));
 
             [$kind, $limit, $message] = array_pad(explode(':', $client['step'], 3), 3, null);
+
+            if ($kind === 'serve-slow') {
+                if ($name === $message) {
+                    usleep((int) $limit * 1000);
+                }
+
+                [$kind, $limit, $message] = ['serve', null, null];
+            }
 
             if ($kind === 'serve-rejecting-slow') {
                 [$kind, $delay, $limit] = ['serve-rejecting', (int) $limit, null];

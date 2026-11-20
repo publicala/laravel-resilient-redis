@@ -179,3 +179,18 @@ it('gives a pooled socket it reuses the read timeout the connection sets, or PHP
     'a read timeout' => [['read_timeout' => 3.0]],
     'no read timeout' => [[]],
 ]);
+
+it('keeps an unlimited read timeout on a pooled socket it reuses', function (): void {
+    $connector = new ResilientPhpRedisConnector(recoverLostConnections: true);
+    $config = [...config('database.redis.default'), 'persistent' => true, 'persistent_id' => Str::random(), 'read_timeout' => -1];
+    $defaultSocketTimeout = ini_set('default_socket_timeout', '1');
+
+    try {
+        $connector->connect($config, [])->ping();
+
+        // A blocking pop holds the reply for two seconds, longer than PHP's default_socket_timeout here.
+        expect($connector->connect($config, [])->blpop(['missing'], 2))->toBeNull();
+    } finally {
+        ini_set('default_socket_timeout', (string) $defaultSocketTimeout);
+    }
+});
