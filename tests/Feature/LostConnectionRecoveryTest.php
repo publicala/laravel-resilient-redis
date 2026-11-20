@@ -617,8 +617,10 @@ it('never replays a read queued after a raw MULTI, since it would run outside th
 });
 
 it('stops a transaction whose MULTI loses the connection after a pipeline that may have sent a WATCH', function (): void {
-    // The callback receives phpredis's client, so a WATCH it sends never passes through the connection.
-    $server = FakeRedisServer::start(['serve:2', 'serve']);
+    // The callback receives phpredis's client, so a WATCH it sends never passes through the connection. The server resets
+    // the socket once the MULTI reaches it: a socket phpredis finds closed before it sends would make phpredis, which saw
+    // the WATCH, refuse to reconnect with an error that does not name a lost connection.
+    $server = FakeRedisServer::start(['serve-then-reset:2', 'serve']);
     $connection = recoveringConnection($server);
     $connection->pipeline(fn (Redis $pipeline): Redis|bool => $pipeline->watch('balance'));
 
