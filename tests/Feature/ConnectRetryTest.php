@@ -565,3 +565,51 @@ it("gives a failed attempt's socket that stays open the read timeout it had, so 
         ->and($reported)->toHaveCount(2)
         ->and($reported[1]->reason)->toBe('stale_pooled_socket');
 });
+
+it('waits about a second on a pooled socket whose server went silent, however long the read timeout', function (): void {
+    $server = FakeRedisServer::start(['serve-then-stall:2', 'serve']);
+    $reported = [];
+    $config = $server->config(['persistent' => true, 'persistent_id' => Str::random(), 'read_timeout' => 5.0]);
+
+    // The connection returns its socket to the pool when it is destroyed at the end of the statement.
+    connectorReportingTo($reported, recoverLostConnections: true)->connect($config, [])->get('key');
+
+    $startedAt = hrtime(true);
+    $connection = connectorReportingTo($reported, recoverLostConnections: true)->connect($config, []);
+    $elapsedMilliseconds = (hrtime(true) - $startedAt) / 1e6;
+
+    expect($connection->get('key'))->toBeNull()
+        ->and($elapsedMilliseconds)->toBeGreaterThanOrEqual(1000.0)->toBeLessThan(2500.0)
+        ->and($reported)->toHaveCount(1)
+        ->and($reported[0]->reason)->toBe('stale_pooled_socket');
+});
+
+it('keeps a read timeout under a second on a socket it returns to the pool', function (): void {
+    $server = FakeRedisServer::start(['serve-then-stall:2', 'serve']);
+    $reported = [];
+    $config = $server->config(['persistent' => true, 'persistent_id' => Str::random(), 'read_timeout' => 0.1]);
+
+    connectorReportingTo($reported, recoverLostConnections: true)->connect($config, [])->get('key');
+
+    $startedAt = hrtime(true);
+    $connection = connectorReportingTo($reported, recoverLostConnections: true)->connect($config, []);
+
+    // The liveness check fails after a tenth of a second, fast for the retry policy, which reports a plain read error.
+    expect($connection->get('key'))->toBeNull()
+        ->and((hrtime(true) - $startedAt) / 1e6)->toBeLessThan(800.0)
+        ->and($reported)->toHaveCount(1)
+        ->and($reported[0]->reason)->toBe('read_error');
+});
+
+it('gives a pooled socket it reuses the read timeout back before AUTH and SELECT run on it', function (): void {
+    $server = FakeRedisServer::start(['serve-slow:1500:SELECT']);
+    $reported = [];
+    $config = $server->config(['persistent' => true, 'persistent_id' => Str::random(), 'read_timeout' => 5.0]);
+
+    connectorReportingTo($reported, recoverLostConnections: true)->connect($config, [])->get('key');
+
+    // The reused socket answers the liveness check at once and the SELECT after a second and a half.
+    expect(connectorReportingTo($reported, recoverLostConnections: true)->connect($config, [])->get('key'))->toBeNull()
+        ->and($server->acceptedConnections())->toBe(1)
+        ->and($reported)->toBeEmpty();
+});

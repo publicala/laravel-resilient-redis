@@ -124,6 +124,31 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
     }
 
     /**
+     * Shorten the read timeout of a socket that goes back to phpredis's pool.
+     *
+     * phpredis returns a persistent client's socket to the pool when the client is destroyed, and the next
+     * connect checks it with an ECHO under the read timeout the socket went back with. On a socket the server
+     * went silent on, that check would hold the connect for the whole read timeout. A second is long enough
+     * for the retry policy to read the failed check as a stall, and the connector gives a socket it reuses
+     * its configured read timeout back. A shorter read timeout stays, since the check would fail sooner.
+     */
+    public function __destruct()
+    {
+        if (! $this->persistent || ! ResilientPhpRedisConnector::poolsPersistentSockets() || ! $this->client->isConnected()) {
+            return;
+        }
+
+        $cap = ConnectRetryPolicy::FAST_FAILURE_MILLISECONDS / 1000;
+        $readTimeout = (float) $this->client->getOption(Redis::OPT_READ_TIMEOUT);
+
+        if ($readTimeout > 0 && $readTimeout <= $cap) {
+            return;
+        }
+
+        rescue(fn (): bool => $this->client->setOption(Redis::OPT_READ_TIMEOUT, $cap), null, false);
+    }
+
+    /**
      * @param  string  $method
      * @param  array<int, mixed>  $parameters
      */
