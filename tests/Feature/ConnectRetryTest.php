@@ -77,22 +77,25 @@ it('retries a TLS handshake that the server resets', function (): void {
         ->and($reported[0]->reason)->toBe('connection_reset');
 });
 
-it('gives up after three attempts with a jittered wait between them, and reports nothing', function (): void {
+it('gives up after three attempts with a jittered wait between them, and reports the failure once', function (): void {
     $server = FakeRedisServer::start(['close-on-first-read']);
     $reported = [];
     $waits = [];
     Sleep::whenFakingSleep(function (CarbonInterval $duration) use (&$waits): void {
         $waits[] = $duration->totalMilliseconds;
     });
+    $connector = connectorReportingTo($reported);
 
-    expect(fn (): PhpRedisConnection => connectorReportingTo($reported)->connect($server->config(), []))
+    expect(fn (): PhpRedisConnection => $connector->connect($server->config(), []))
         ->toThrowLostConnection();
 
     expect($server->acceptedConnections())->toBe(3)
         ->and($waits)->toHaveCount(2)
         ->and($waits[0])->toBeGreaterThanOrEqual(100)->toBeLessThanOrEqual(200)
         ->and($waits[1])->toBeGreaterThanOrEqual(100)->toBeLessThanOrEqual(400)
-        ->and($reported)->toBeEmpty();
+        ->and($reported)->toHaveCount(1)
+        ->and($reported[0])->toBeInstanceOf(ConnectFailed::class)
+        ->and($reported[0]->context())->toMatchArray(['persistent' => false, 'attempts' => 3]);
 });
 
 it('makes the number of attempts the connection allows', function (int $retries, int $attempts): void {
