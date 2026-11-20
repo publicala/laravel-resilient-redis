@@ -171,6 +171,15 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
     }
 
     /**
+     * The read timeout a socket has. phpredis leaves a socket opened without one on PHP's default_socket_timeout,
+     * which setting a read timeout of zero would turn off.
+     */
+    private static function effectiveReadTimeout(mixed $readTimeout): float
+    {
+        return (float) $readTimeout > 0 ? (float) $readTimeout : (float) ini_get('default_socket_timeout');
+    }
+
+    /**
      * Close the socket a failed attempt holds. A pooled socket that fails its liveness check makes phpredis
      * open a replacement inside the same pconnect(), and a persistent client returns its socket to the pool
      * when it is destroyed, so leaving it open would add a socket to the pool on every recovery.
@@ -193,10 +202,9 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
 
         rescue(fn (): bool => $client->close(), null, false);
 
-        // A socket whose AUTH was refused stays open and returns to the pool, so it gets its read timeout back. phpredis
-        // leaves a socket opened without one on PHP's default, which a read timeout of zero would turn off.
+        // A socket whose AUTH was refused stays open and returns to the pool, so it gets its read timeout back.
         if ($client->isConnected()) {
-            $client->setOption(Redis::OPT_READ_TIMEOUT, $readTimeout > 0 ? $readTimeout : (float) ini_get('default_socket_timeout'));
+            $client->setOption(Redis::OPT_READ_TIMEOUT, self::effectiveReadTimeout($readTimeout));
         }
     }
 
