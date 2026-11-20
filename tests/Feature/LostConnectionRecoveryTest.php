@@ -637,9 +637,9 @@ it('stops a transaction whose MULTI loses the connection after a pipeline that m
 
 it('stops a transaction after a read recovered on a rebuilt client, since a WATCH a pipeline sent died with the old socket', function (Closure $open): void {
     // The callback receives phpredis's client, so a WATCH it sends never passes through the connection. The server resets
-    // the socket once the GET reaches it: a socket phpredis finds closed before it sends would make phpredis, which saw
-    // the WATCH, refuse to reconnect, and that error reaches the caller.
-    $server = FakeRedisServer::start(['serve-then-reset:2', 'serve']);
+    // the socket 50 ms after the GET reaches it, once phpredis waits for the reply: a socket phpredis finds closed before
+    // it sends or reads would make phpredis, which saw the WATCH, refuse to reconnect, and that error reaches the caller.
+    $server = FakeRedisServer::start(['serve-then-reset:2:50', 'serve']);
     $connection = recoveringConnection($server);
     $connection->pipeline(fn (Redis $pipeline): Redis|bool => $pipeline->watch('balance'));
 

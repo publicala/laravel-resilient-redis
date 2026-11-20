@@ -13,6 +13,7 @@ declare(strict_types=1);
  *   serve                 answer every command
  *   serve:N               answer N commands, then close the socket (FIN)
  *   serve-then-reset:N    answer N commands, then reset the socket (RST) when the next one arrives
+ *   serve-then-reset:N:MS like serve-then-reset:N, waiting MS milliseconds before the reset, during which the whole server waits
  *   serve-rejecting:N:CMD answer N commands like serve:N, refusing CMD with a NOPERM error (phpredis throws)
  *   serve-rejecting-slow:MS:CMD answer every command, refusing CMD at once like serve-rejecting and waiting MS milliseconds, during which the whole server waits, before every other reply
  *   serve-unknown:N:CMD   answer N commands like serve:N, answering CMD with "ERR unknown command" (phpredis returns false)
@@ -195,6 +196,8 @@ while (true) {
                 }
 
                 if ($kind === 'serve-then-reset') {
+                    // A client that checks its socket before it reads the reply sees a reset that arrived first.
+                    usleep(1000 * (int) $message);
                     $resetSocket($stream);
                     unset($clients[(int) $stream]);
 
