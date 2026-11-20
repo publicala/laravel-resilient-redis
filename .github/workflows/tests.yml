@@ -141,6 +141,7 @@ jobs:
           php-version: '8.3'
           extensions: redis-6.0.1, sockets, pcntl
           coverage: none
+        env:
           # The runner image ships PHP 8.3.6, whose blocking TLS peek can hang a TLS test until the job times out.
           update: true
 
