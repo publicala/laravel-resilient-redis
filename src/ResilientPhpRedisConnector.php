@@ -144,6 +144,12 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
 
             $this->reapplyNativeRetryOptions($client, $config);
 
+            // phpredis reuses a pooled socket with the read timeout it went back to the pool with, which a
+            // destroyed connection shortens, and Laravel restores only a read timeout the connection sets.
+            if ((bool) ($attemptConfig['persistent'] ?? false)) {
+                $client->setOption(Redis::OPT_READ_TIMEOUT, self::effectiveReadTimeout($config['read_timeout'] ?? 0));
+            }
+
             if ($lastReason !== null && $this->report instanceof Closure) {
                 ($this->report)(new ConnectRecovered(
                     host: (string) $config['host'],

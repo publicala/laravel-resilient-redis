@@ -4,6 +4,16 @@ All notable changes to `publicala/laravel-resilient-redis`.
 
 The top `## ` header is always the most recent version (`## vX.Y.Z`, exact), and that header is the source of truth the release workflow reads. Adding a new top block to this file is what cuts a release.
 
+## v3.3.0
+
+### Changed
+
+- **A silent pooled socket costs about a second, not a read timeout.** phpredis checks a pooled socket with an `ECHO` under the read timeout the socket went back to the pool with, so on a socket the server went silent on, the connect waited the whole read timeout before its retry. A connection with `recover_lost_connections` on now shortens its socket's read timeout to one second when it is destroyed and the socket goes back to the pool, so the retry starts about 1.2 seconds after the first attempt. A socket left by a client without the package's recovery keeps its own read timeout.
+
+### Fixed
+
+- **A reused pooled socket gets the connection's own read timeout.** phpredis keeps the read timeout last set on a pooled socket, and Laravel applies only a `read_timeout` the connection sets, so a connection without one used the timeout of the connection that held the socket before it, and a blocking command could be cut short. The connector now gives every persistent client the connection's `read_timeout`, or `default_socket_timeout` when it sets none.
+
 ## v3.2.0
 
 ### Changed

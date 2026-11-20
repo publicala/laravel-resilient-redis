@@ -5,6 +5,8 @@ declare(strict_types=1);
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Redis;
+use Illuminate\Support\Str;
+use Publicala\ResilientRedis\ResilientPhpRedisConnector;
 
 beforeEach(function (): void {
     config(['cache.default' => 'redis', 'cache.stores.redis.connection' => 'default', 'cache.stores.redis.lock_connection' => 'default']);
@@ -158,3 +160,22 @@ it('waits for the raw EXEC before asking which database a raw SELECT a pipeline 
         $redis->flushdb();
     }
 });
+
+it('gives a pooled socket it reuses the read timeout the connection sets, or PHP default_socket_timeout when it sets none', function (array $readTimeout): void {
+    $connector = new ResilientPhpRedisConnector(recoverLostConnections: true);
+    $config = [...config('database.redis.default'), 'persistent' => true, 'persistent_id' => Str::random(), ...$readTimeout];
+    $defaultSocketTimeout = ini_set('default_socket_timeout', '3');
+
+    try {
+        // The first connection returns its socket to the pool when it is destroyed at the end of the statement.
+        $connector->connect($config, [])->ping();
+
+        // A blocking pop holds the reply for two seconds, longer than the second a pooled socket's liveness check waits.
+        expect($connector->connect($config, [])->blpop(['missing'], 2))->toBeNull();
+    } finally {
+        ini_set('default_socket_timeout', (string) $defaultSocketTimeout);
+    }
+})->with([
+    'a read timeout' => [['read_timeout' => 3.0]],
+    'no read timeout' => [[]],
+]);
