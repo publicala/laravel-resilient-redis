@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\ServiceProvider;
 use Publicala\ResilientRedis\Events\CommandRecovered;
+use Publicala\ResilientRedis\Events\ConnectFailed;
 use Publicala\ResilientRedis\Events\ConnectRecovered;
 use Publicala\ResilientRedis\Events\RebuildFailed;
 use Publicala\ResilientRedis\RecoveryEvents;
@@ -83,7 +84,7 @@ it('publishes its config file', function (): void {
         ->and(realpath((string) array_key_first($paths)))->toBe(realpath(__DIR__.'/../../config/resilient-redis.php'));
 });
 
-it('logs one warning per recovered connect or read, and per failed rebuild', function (object $event, string $message): void {
+it('logs one warning per recovered connect or read, and per failed connect or rebuild', function (object $event, string $message): void {
     Log::spy();
 
     resolve(RecoveryEvents::class)->dispatch($event);
@@ -91,6 +92,7 @@ it('logs one warning per recovered connect or read, and per failed rebuild', fun
     Log::shouldHaveReceived('warning')->once()->with($message, $event->context());
 })->with([
     'a connect' => [new ConnectRecovered('127.0.0.1', 6379, 0, true, 2, 140, 'read_error'), 'redis.connect.recovered'],
+    'a failed connect' => [new ConnectFailed('127.0.0.1', 6379, 0, true, 1, 2003, 2003, 'timed_out'), 'redis.connect.failed'],
     'a read' => [new CommandRecovered('cache', 'get', 12, 'connection_reset'), 'redis.command.recovered'],
     'a failed rebuild' => [new RebuildFailed('cache', 'connection_reset'), 'redis.rebuild.failed'],
 ]);

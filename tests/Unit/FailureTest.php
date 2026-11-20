@@ -92,3 +92,15 @@ it('recognizes the failure phpredis raises instead of reconnecting a socket that
     expect(Failure::isLostTransactionState(new RedisException('Connection lost and socket is in MULTI/watching mode')))->toBeTrue()
         ->and(Failure::isLostTransactionState(new RedisException('Connection lost')))->toBeFalse();
 });
+
+it('names every connect failure, retried or not', function (Throwable $e, string $reason): void {
+    expect(Failure::connectFailureReason($e))->toBe($reason);
+})->with([
+    'a TCP connect timeout' => [new RedisException('Connection timed out'), Failure::TIMED_OUT],
+    'a TLS handshake timeout' => [new ErrorException('Redis::pconnect(): SSL: Handshake timed out'), Failure::TIMED_OUT],
+    'a silent pooled socket' => [raisedBy(new RedisException('read error on connection to cache.example.com:6379'), 'pconnect'), Failure::STALE_POOLED_SOCKET],
+    'a read error after the connect' => [raisedBy(new RedisException('read error on connection to cache.example.com:6379'), 'select'), 'read_error'],
+    'a refused connection' => [new RedisException('Connection refused'), 'connection_refused'],
+    'a wrong password' => [new RedisException('WRONGPASS invalid username-password pair or user is disabled.'), Failure::UNCLASSIFIED],
+    'a timeout outside phpredis' => [new RuntimeException('Operation timed out'), Failure::UNCLASSIFIED],
+]);

@@ -9,6 +9,7 @@ use Illuminate\Redis\Connections\PhpRedisConnection;
 use Illuminate\Redis\Connectors\PhpRedisConnector;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Sleep;
+use Publicala\ResilientRedis\Events\ConnectFailed;
 use Publicala\ResilientRedis\Events\ConnectRecovered;
 use Redis;
 use ReflectionClass;
@@ -102,6 +103,7 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
         $policy = ConnectRetryPolicy::fromConfig($config);
         $firstAttemptAt = $this->now();
         $lastFailure = null;
+        $lastFailedAfter = 0.0;
         $lastReason = null;
         $attemptConfig = $config;
 
@@ -109,8 +111,8 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
             $attemptStartedAt = $this->now();
 
             // A sleep can overrun its delay, so every retry checks the window at the moment it starts.
-            if ($lastFailure instanceof Throwable) {
-                throw_unless($policy->allowsAttemptAt($attemptStartedAt - $firstAttemptAt), $lastFailure);
+            if ($lastFailure instanceof Throwable && ! $policy->allowsAttemptAt($attemptStartedAt - $firstAttemptAt)) {
+                $this->giveUp($lastFailure, $config, $attempt - 1, $attemptStartedAt - $firstAttemptAt, $lastFailedAfter);
             }
 
             try {
@@ -122,11 +124,14 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
                 $reason = $policy->retryReason($attempt, $e, $failedAfter);
                 $delay = $reason === null ? null : $policy->backoffMilliseconds($attempt);
 
-                throw_if($delay === null || ! $policy->allowsAttemptAt($this->now() - $firstAttemptAt + $delay), $e);
+                if ($delay === null || ! $policy->allowsAttemptAt($this->now() - $firstAttemptAt + $delay)) {
+                    $this->giveUp($e, $config, $attempt, $this->now() - $firstAttemptAt, $failedAfter);
+                }
 
                 Sleep::for($delay)->milliseconds();
 
                 $lastFailure = $e;
+                $lastFailedAfter = $failedAfter;
                 $lastReason = $reason;
 
                 // The pool hands out its oldest socket first, and a server that dropped one silently usually dropped
@@ -174,6 +179,29 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
         if ((bool) ($config['persistent'] ?? false)) {
             $client->setOption(Redis::OPT_READ_TIMEOUT, $this->effectiveReadTimeout($config['read_timeout'] ?? 0));
         }
+    }
+
+    /**
+     * Report a connect that failed on its last attempt and rethrow its error.
+     *
+     * @param  array<string, mixed>  $config
+     */
+    private function giveUp(Throwable $e, array $config, int $attempts, float $milliseconds, float $lastAttemptMilliseconds): never
+    {
+        if ($this->report instanceof Closure) {
+            ($this->report)(new ConnectFailed(
+                host: (string) $config['host'],
+                port: (int) $config['port'],
+                database: isset($config['database']) ? (int) $config['database'] : null,
+                persistent: (bool) ($config['persistent'] ?? false),
+                attempts: $attempts,
+                milliseconds: (int) round($milliseconds),
+                lastAttemptMilliseconds: (int) round($lastAttemptMilliseconds),
+                reason: Failure::connectFailureReason($e),
+            ));
+        }
+
+        throw $e;
     }
 
     /**

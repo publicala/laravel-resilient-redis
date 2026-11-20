@@ -9,6 +9,7 @@ use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Redis\RedisManager;
 use Illuminate\Support\ServiceProvider;
 use Publicala\ResilientRedis\Events\CommandRecovered;
+use Publicala\ResilientRedis\Events\ConnectFailed;
 use Publicala\ResilientRedis\Events\ConnectRecovered;
 use Publicala\ResilientRedis\Events\RebuildFailed;
 use Publicala\ResilientRedis\Listeners\LogRecovery;
@@ -46,7 +47,7 @@ final class ResilientRedisServiceProvider extends ServiceProvider
         ], 'resilient-redis-config');
 
         if ($this->app->make(Repository::class)->get('resilient-redis.log_recoveries', true)) {
-            $this->app->make(Dispatcher::class)->listen([ConnectRecovered::class, CommandRecovered::class, RebuildFailed::class], LogRecovery::class);
+            $this->app->make(Dispatcher::class)->listen([ConnectRecovered::class, ConnectFailed::class, CommandRecovered::class, RebuildFailed::class], LogRecovery::class);
         }
     }
 }
