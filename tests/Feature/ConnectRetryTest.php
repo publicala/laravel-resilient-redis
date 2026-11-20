@@ -7,6 +7,7 @@ use Illuminate\Redis\Connections\PhpRedisConnection;
 use Illuminate\Redis\Connectors\PhpRedisConnector;
 use Illuminate\Support\Sleep;
 use Illuminate\Support\Str;
+use Publicala\ResilientRedis\Events\ConnectFailed;
 use Publicala\ResilientRedis\Events\ConnectRecovered;
 use Publicala\ResilientRedis\ResilientPhpRedisConnection;
 use Publicala\ResilientRedis\ResilientPhpRedisConnector;
@@ -121,10 +122,17 @@ it('does not retry a TLS handshake that times out, because the server is overloa
     $server = FakeRedisServer::start(['stall']);
     $reported = [];
 
-    expect(fn (): PhpRedisConnection => connectorReportingTo($reported)->connect($server->config(['timeout' => 0.2], tls: true), []))
+    $connector = connectorReportingTo($reported);
+
+    expect(fn (): PhpRedisConnection => $connector->connect($server->config(['timeout' => 0.2], tls: true), []))
         ->toThrow(ErrorException::class, 'Handshake timed out');
 
-    expect($server->acceptedConnections())->toBe(1);
+    expect($server->acceptedConnections())->toBe(1)
+        ->and($reported)->toHaveCount(1)
+        ->and($reported[0])->toBeInstanceOf(ConnectFailed::class)
+        ->and($reported[0]->context())->toMatchArray(['attempts' => 1, 'reason' => 'timed_out'])
+        ->and($reported[0]->lastAttemptMilliseconds)->toBeGreaterThanOrEqual(150)
+        ->and($reported[0]->milliseconds)->toBeGreaterThanOrEqual($reported[0]->lastAttemptMilliseconds);
     Sleep::assertNeverSlept();
 });
 
@@ -237,7 +245,9 @@ it("retries a silent pooled socket only once, so a server that stopped answering
     }
 
     expect($server->acceptedConnections())->toBe(3)
-        ->and($reported)->toBeEmpty();
+        ->and($reported)->toHaveCount(1)
+        ->and($reported[0])->toBeInstanceOf(ConnectFailed::class)
+        ->and($reported[0]->context())->toMatchArray(['persistent' => true, 'attempts' => 2, 'reason' => 'read_error']);
     Sleep::assertSleptTimes(1);
 });
 
@@ -281,7 +291,9 @@ it('does not retry a silent pooled socket once the retry window has closed', fun
     expect(fn (): PhpRedisConnection => $connector->connect($config, []))
         ->toThrow(RedisException::class, 'read error on connection');
 
-    expect($reported)->toBeEmpty();
+    expect($reported)->toHaveCount(1)
+        ->and($reported[0])->toBeInstanceOf(ConnectFailed::class)
+        ->and($reported[0]->context())->toMatchArray(['attempts' => 1, 'reason' => 'stale_pooled_socket']);
     Sleep::assertNeverSlept();
 });
 
@@ -296,7 +308,9 @@ it('does not retry a silent pooled socket when the connection turns the retry of
     expect(fn (): PhpRedisConnection => $connector->connect($config, []))
         ->toThrow(RedisException::class, 'read error on connection');
 
-    expect($reported)->toBeEmpty();
+    expect($reported)->toHaveCount(1)
+        ->and($reported[0])->toBeInstanceOf(ConnectFailed::class)
+        ->and($reported[0]->context())->toMatchArray(['attempts' => 1, 'reason' => 'stale_pooled_socket']);
     Sleep::assertNeverSlept();
 });
 
@@ -313,7 +327,8 @@ it('does not retry a fresh persistent connection whose server stalls on AUTH or 
     }
 
     expect($server->acceptedConnections())->toBe(1)
-        ->and($reported)->toBeEmpty();
+        ->and($reported)->toHaveCount(1)
+        ->and($reported[0]->context())->toMatchArray(['attempts' => 1, 'reason' => 'read_error']);
     Sleep::assertNeverSlept();
 })->with([
     'AUTH' => [['password' => 'secret'], 'auth'],
@@ -375,7 +390,9 @@ it('starts no attempt once the retry window has closed during the wait', functio
 
     expect(fn (): PhpRedisConnection => $connector->connect($server->config(), []))->toThrow(RedisException::class);
 
-    expect($server->acceptedConnections())->toBe(1);
+    expect($server->acceptedConnections())->toBe(1)
+        ->and($reported)->toHaveCount(1)
+        ->and($reported[0]->context())->toMatchArray(['attempts' => 1, 'milliseconds' => 6000, 'lastAttemptMilliseconds' => 0]);
     Sleep::assertSleptTimes(1);
 });
 
@@ -393,7 +410,9 @@ it('does not wait for an attempt that would start after the window closes', func
 
     expect(fn (): PhpRedisConnection => $connector->connect($server->config(), []))->toThrow(RedisException::class);
 
-    expect($server->acceptedConnections())->toBe(2);
+    expect($server->acceptedConnections())->toBe(2)
+        ->and($reported)->toHaveCount(1)
+        ->and($reported[0]->context())->toMatchArray(['attempts' => 2, 'milliseconds' => 5900, 'lastAttemptMilliseconds' => 0]);
     Sleep::assertSleptTimes(1);
 });
 

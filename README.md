@@ -69,17 +69,18 @@ A lost client that still holds its socket is closed before it is replaced. Other
 
 Laravel's `command_retries` is not used while the recovery is on, so no write is replayed. Turn `recover_lost_connections` off to keep Laravel's own recovery instead.
 
-### Reports each recovery
+### Reports each recovery and each failed connect
 
-Each recovered connect dispatches `Publicala\ResilientRedis\Events\ConnectRecovered`, and each read the package runs again after a lost connection dispatches `Publicala\ResilientRedis\Events\CommandRecovered`. A command whose client could not be rebuilt dispatches `Publicala\ResilientRedis\Events\RebuildFailed`, with the reason the command lost its connection. A pipeline or transaction opened again is not reported, and neither is anything that happens inside a listener of these events, so a listener that uses Redis during an outage cannot set off another. By default the package also logs one warning per event:
+Each recovered connect dispatches `Publicala\ResilientRedis\Events\ConnectRecovered`, and each connect that fails on its last attempt dispatches `Publicala\ResilientRedis\Events\ConnectFailed` before its error is rethrown. Each read the package runs again after a lost connection dispatches `Publicala\ResilientRedis\Events\CommandRecovered`. A command whose client could not be rebuilt dispatches `Publicala\ResilientRedis\Events\RebuildFailed`, with the reason the command lost its connection. A pipeline or transaction opened again is not reported, and neither is anything that happens inside a listener of these events, so a listener that uses Redis during an outage cannot set off another. By default the package also logs one warning per event:
 
 ```text
 redis.connect.recovered {"host":"tls://cache.example.com","port":6379,"database":0,"persistent":true,"attempts":2,"milliseconds":143,"reason":"read_error"}
+redis.connect.failed {"host":"tls://cache.example.com","port":6379,"database":0,"persistent":true,"attempts":1,"milliseconds":2004,"lastAttemptMilliseconds":2003,"reason":"timed_out"}
 redis.command.recovered {"connection":"cache","command":"get","milliseconds":12,"reason":"connection_reset"}
 redis.rebuild.failed {"connection":"cache","reason":"connection_reset"}
 ```
 
-The events carry a reason code, never the exception text, arguments or credentials. `persistent` is the connection's setting, also when a recovery connected on the retry's own socket. A failing listener is reported and never changes the outcome of the Redis call.
+The events carry a reason code, never the exception text, arguments or credentials. A failed connect's reason is `timed_out` for a connect, TLS handshake or read that timed out with that text, a retry reason for a failure the retry recognizes, and `unclassified` otherwise. phpredis reports a read that times out during `AUTH` or `SELECT` as a read error, so `lastAttemptMilliseconds`, the length of the last attempt, tells a timeout apart from a fast failure. `milliseconds` runs from the first attempt to the end of the last one. `persistent` is the connection's setting, also when a recovery connected on the retry's own socket. A failing listener is reported and never changes the outcome of the Redis call.
 
 ## Replacing a custom connector
 
@@ -111,7 +112,7 @@ The package's own switches live in `config/resilient-redis.php`. Each one reads 
 | --- | --- | --- | --- |
 | `enabled` | `RESILIENT_REDIS_ENABLED` | `true` | When false, phpredis uses Laravel's stock connector, as if the package were not installed |
 | `recover_lost_connections` | `RESILIENT_REDIS_RECOVER_LOST_CONNECTIONS` | `true` | The lost-connection recovery. When false, phpredis connections keep Laravel's own handling |
-| `log_recoveries` | `RESILIENT_REDIS_LOG_RECOVERIES` | `true` | One warning per recovery and per failed rebuild |
+| `log_recoveries` | `RESILIENT_REDIS_LOG_RECOVERIES` | `true` | One warning per recovery and per failed connect or rebuild |
 
 ```bash
 php artisan vendor:publish --tag=resilient-redis-config

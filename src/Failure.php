@@ -24,6 +24,10 @@ final class Failure
 
     public const string STALE_POOLED_SOCKET = 'stale_pooled_socket';
 
+    public const string TIMED_OUT = 'timed_out';
+
+    public const string UNCLASSIFIED = 'unclassified';
+
     /**
      * Connect failures that end within milliseconds when a pooled socket or the server is briefly gone.
      *
@@ -75,6 +79,23 @@ final class Failure
         }
 
         return self::reasonFor($e, self::FAST_CONNECT_FAILURES);
+    }
+
+    /**
+     * The reason a connect failed, retried or not. A timed-out connect, TLS handshake or read is named before
+     * the rest, and a failure this package does not name is unclassified.
+     */
+    public static function connectFailureReason(Throwable $e): string
+    {
+        if (self::isFromPhpRedis($e) && Str::contains($e->getMessage(), 'timed out')) {
+            return self::TIMED_OUT;
+        }
+
+        if (self::isStalePooledSocket($e)) {
+            return self::STALE_POOLED_SOCKET;
+        }
+
+        return self::retryableConnectReason($e) ?? self::UNCLASSIFIED;
     }
 
     /**
