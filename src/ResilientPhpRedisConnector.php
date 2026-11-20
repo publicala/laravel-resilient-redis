@@ -147,7 +147,7 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
             // phpredis reuses a pooled socket with the read timeout it went back to the pool with, which a
             // destroyed connection shortens, and Laravel restores only a read timeout the connection sets.
             if ((bool) ($attemptConfig['persistent'] ?? false)) {
-                $client->setOption(Redis::OPT_READ_TIMEOUT, self::effectiveReadTimeout($config['read_timeout'] ?? 0));
+                $client->setOption(Redis::OPT_READ_TIMEOUT, $this->effectiveReadTimeout($config['read_timeout'] ?? 0));
             }
 
             if ($lastReason !== null && $this->report instanceof Closure) {
@@ -180,7 +180,7 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
      * The read timeout a socket has. phpredis leaves a socket opened without one on PHP's default_socket_timeout,
      * which setting a read timeout of zero would turn off.
      */
-    private static function effectiveReadTimeout(mixed $readTimeout): float
+    private function effectiveReadTimeout(mixed $readTimeout): float
     {
         return (float) $readTimeout > 0 ? (float) $readTimeout : (float) ini_get('default_socket_timeout');
     }
@@ -210,7 +210,7 @@ final class ResilientPhpRedisConnector extends PhpRedisConnector
 
         // A socket whose AUTH was refused stays open and returns to the pool, so it gets its read timeout back.
         if ($client->isConnected()) {
-            $client->setOption(Redis::OPT_READ_TIMEOUT, self::effectiveReadTimeout($readTimeout));
+            $client->setOption(Redis::OPT_READ_TIMEOUT, $this->effectiveReadTimeout($readTimeout));
         }
     }
 
