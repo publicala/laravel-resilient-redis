@@ -23,7 +23,7 @@ Every connect Laravel's phpredis connector makes goes through the package: the f
 | `read error on connection`, `Connection lost`, `went away` during AUTH or SELECT | The server dropped a pooled (persistent) socket |
 | `SSL: Connection reset by peer`, `SSL: Broken pipe` | A TLS frontend reset the handshake |
 | `Connection refused`, a missing Unix socket | The server is restarting |
-| `Temporary failure in name resolution` | The resolver failed for now |
+| `Temporary failure in name resolution` (glibc), `getaddrinfo for ... failed: Try again` (musl, as on Alpine) | The resolver failed for now |
 
 The forms above are matched by their message, so a lasting misconfiguration that produces one (a wrong port answers `Connection refused`) fails only after the retries: the time of two more attempts, plus at most 0.6 seconds of waiting between them.
 
@@ -56,14 +56,14 @@ A connection with no `timeout` gets one of 2 seconds. Without it, a connect to a
 
 Laravel 13.28 and later rebuild a phpredis client that loses its connection mid-command and run a read once more. The package does the same on every Laravel version, in place of Laravel's own recovery, and more conservatively:
 
-- **Reads only.** A read (`GET`, `HGETALL`, `ZRANGE` and the like) runs once more on the rebuilt client. A write (`SET`, `INCR`, `EVAL`, a queue push) is never replayed, because the server may have run it before the reply was lost. The client is still rebuilt, so the next command works.
-- **Never inside a WATCH, a MULTI or a pipeline.** The watch dies with the old socket, and a queued command would run outside its batch, so the error is rethrown after the rebuild. When the package cannot tell whether a WATCH is still open (one a pipeline sent, or an UNWATCH a pipeline queued), it treats the watch as open, which only costs the replay.
-- **The rebuilt client keeps its state.** The prefix, serializer and compression a caller set at runtime, and a database chosen with `SELECT`, carry over. `withoutSerializationOrCompression()` stays raw across a rebuild.
-- **The original error wins.** When the rebuild itself fails, the command's own error is rethrown, since for a write it is the one that says the server may have applied it.
+- **Reads only.** A read (`GET`, `HGETALL`, `ZRANGE` and the like) runs once more on the rebuilt client. A read that failed after a second or more, typically by waiting out its read timeout, on a socket that answered within the last 5 seconds is not replayed either: the server is stalling, and another wait would double the delay. On a socket that sat idle longer, something between (a NAT or a load balancer) may have dropped the connection without closing it, so that read is replayed. A write (`SET`, `INCR`, `EVAL`, a queue push) is never replayed, because the server may have run it before the reply was lost. The client is still rebuilt, so the next command works.
+- **Never inside a WATCH, a MULTI or a pipeline.** The watch dies with the old socket, and a queued command would run outside its batch, so the error is rethrown after the rebuild. When the package cannot tell whether a WATCH is still open (one a pipeline sent, or an UNWATCH a pipeline queued), it treats the watch as open, which only costs the replay. A `WATCH`, `MULTI`, `EXEC` or `DISCARD` sent through `executeRaw()` counts too. A pipeline callback gets phpredis's own client, so a `WATCH` it sends there is not seen: after a pipeline, a transaction whose `MULTI` loses the connection is not opened again until a transaction or a rebuild has ended every watch. When a read after a pipeline recovers on a rebuilt client, the next `MULTI` (through `transaction()`, `multi()` or `executeRaw()`) throws `Publicala\ResilientRedis\LostWatchException` once, because a watch the pipeline sent died with the old socket. A `WATCH` or `UNWATCH` sent through the connection, or `disconnect()`, clears it.
+- **The rebuilt client keeps its state.** The prefix, serializer, compression, `OPT_PACK_IGNORE_NUMBERS` (phpredis 6.2 and later) and read timeout a caller set at runtime, and a database chosen with `SELECT`, through phpredis or `executeRaw()`, carry over. A raw `SELECT` queued in a pipeline or a transaction is followed once the batch runs, through `CLIENT INFO` (Redis 6.2 and later, and Valkey). `withoutSerializationOrCompression()` stays raw across a rebuild.
+- **The original error wins.** When the rebuild itself fails, the command's own error is rethrown, since for a write it is the one that says the server may have applied it. A failed rebuild dispatches `Publicala\ResilientRedis\Events\RebuildFailed` (below), and the exception handler gets only the command's error.
 
 TLS resets that phpredis reports as a PHP warning (`Redis::get(): SSL: Connection reset by peer`) count as a lost connection, as they do on Laravel 13.31 and later.
 
-A protocol error (`protocol error, got 'X' as reply type byte`) counts as a lost connection too. phpredis raises it when the reply stream goes out of step, typically when the connection breaks mid-reply, and it leaves the socket open. A connect that fails this way is not retried, since a server that does not speak Redis answers the same.
+A protocol error (`protocol error, got 'X' as reply type byte`) counts as a lost connection too. phpredis raises it when the reply stream goes out of step, typically when the connection breaks mid-reply, and it leaves the socket open. The package closes a socket left open this way, except a persistent stream that other clients share because phpredis pooling is off: that one stays open, and the rebuilt client connects on a socket of its own. A connect that fails this way is not retried, since a server that does not speak Redis answers the same.
 
 A lost client that still holds its socket is closed before it is replaced. Otherwise phpredis returns a persistent client's socket to its pool, where the next connect would reuse it.
 
@@ -71,11 +71,12 @@ Laravel's `command_retries` is not used while the recovery is on, so no write is
 
 ### Reports each recovery
 
-Each recovered connect dispatches `Publicala\ResilientRedis\Events\ConnectRecovered`, and each read the package runs again after a lost connection dispatches `Publicala\ResilientRedis\Events\CommandRecovered`. A pipeline or transaction opened again is not reported, and neither is a recovery inside a recovery listener. By default the package also logs one warning per recovery:
+Each recovered connect dispatches `Publicala\ResilientRedis\Events\ConnectRecovered`, and each read the package runs again after a lost connection dispatches `Publicala\ResilientRedis\Events\CommandRecovered`. A command whose client could not be rebuilt dispatches `Publicala\ResilientRedis\Events\RebuildFailed`, with the reason the command lost its connection. A pipeline or transaction opened again is not reported, and neither is anything that happens inside a listener of these events, so a listener that uses Redis during an outage cannot set off another. By default the package also logs one warning per event:
 
 ```text
 redis.connect.recovered {"host":"tls://cache.example.com","port":6379,"database":0,"persistent":true,"attempts":2,"milliseconds":143,"reason":"read_error"}
 redis.command.recovered {"connection":"cache","command":"get","milliseconds":12,"reason":"connection_reset"}
+redis.rebuild.failed {"connection":"cache","reason":"connection_reset"}
 ```
 
 The events carry a reason code, never the exception text, arguments or credentials. `persistent` is the connection's setting, also when a recovery connected on the retry's own socket. A failing listener is reported and never changes the outcome of the Redis call.
@@ -110,7 +111,7 @@ The package's own switches live in `config/resilient-redis.php`. Each one reads 
 | --- | --- | --- | --- |
 | `enabled` | `RESILIENT_REDIS_ENABLED` | `true` | When false, phpredis uses Laravel's stock connector, as if the package were not installed |
 | `recover_lost_connections` | `RESILIENT_REDIS_RECOVER_LOST_CONNECTIONS` | `true` | The lost-connection recovery. When false, phpredis connections keep Laravel's own handling |
-| `log_recoveries` | `RESILIENT_REDIS_LOG_RECOVERIES` | `true` | One warning per recovery |
+| `log_recoveries` | `RESILIENT_REDIS_LOG_RECOVERIES` | `true` | One warning per recovery and per failed rebuild |
 
 ```bash
 php artisan vendor:publish --tag=resilient-redis-config

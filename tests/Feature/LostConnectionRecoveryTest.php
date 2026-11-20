@@ -2,12 +2,15 @@
 
 declare(strict_types=1);
 
+use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Redis\Events\CommandExecuted;
 use Illuminate\Redis\Events\CommandFailed;
 use Illuminate\Support\Sleep;
 use Illuminate\Support\Str;
 use Publicala\ResilientRedis\Events\CommandRecovered;
+use Publicala\ResilientRedis\Events\RebuildFailed;
+use Publicala\ResilientRedis\LostWatchException;
 use Publicala\ResilientRedis\ResilientPhpRedisConnection;
 use Publicala\ResilientRedis\ResilientPhpRedisConnector;
 use Publicala\ResilientRedis\Tests\Support\FakeRedisServer;
@@ -17,15 +20,16 @@ use Publicala\ResilientRedis\Tests\Support\FakeRedisServer;
  *
  * @param  array<string, mixed>  $overrides
  * @param  list<object>  $reported
+ * @param  array<string, mixed>  $options  the global redis.options
  */
-function recoveringConnection(FakeRedisServer $server, array &$reported = [], array $overrides = []): ResilientPhpRedisConnection
+function recoveringConnection(FakeRedisServer $server, array &$reported = [], array $overrides = [], array $options = []): ResilientPhpRedisConnection
 {
     $connection = (new ResilientPhpRedisConnector(
         recoverLostConnections: true,
         report: function (object $event) use (&$reported): void {
             $reported[] = $event;
         },
-    ))->connect($server->config($overrides), []);
+    ))->connect($server->config($overrides), $options);
 
     $connection->setName('cache');
     $connection->setEventDispatcher(resolve(Dispatcher::class));
@@ -51,6 +55,21 @@ it('runs a read once more on a rebuilt client when the server drops the connecti
     'pconnect' => true,
 ]);
 
+it('runs a read once more that reads a range or a sample', function (string $command, array $parameters, string $sent): void {
+    $server = FakeRedisServer::start(['serve:1', 'serve']);
+    $reported = [];
+    $connection = recoveringConnection($server, $reported);
+
+    $connection->command($command, $parameters);
+
+    expect($server->commands())->toBe(['SELECT 0', $sent, 'SELECT 0', $sent])
+        ->and($reported[0]->command)->toBe(mb_strtolower($command));
+})->with([
+    'zRevRange' => ['zRevRange', ['scores', 0, -1], 'ZREVRANGE scores 0 -1'],
+    'zRangeByLex' => ['zRangeByLex', ['names', '-', '+'], 'ZRANGEBYLEX names - +'],
+    'hRandField' => ['hRandField', ['profile'], 'HRANDFIELD profile'],
+]);
+
 it('runs a read once more on a rebuilt client after a READONLY reply, which leaves the old socket open', function (): void {
     $server = FakeRedisServer::start(["error-after:2:READONLY You can't write against a read only replica.", 'serve']);
     $reported = [];
@@ -63,6 +82,31 @@ it('runs a read once more on a rebuilt client after a READONLY reply, which leav
         ->and($reported)->toHaveCount(1)
         ->and($reported[0]->reason)->toBe('readonly_replica');
 });
+
+it('leaves open a persistent stream that phpredis pooling is off for, and rebuilds on a socket of its own', function (string $where): void {
+    $previous = ini_set('redis.pconnect.pooling_enabled', '0');
+    // Both connections share one TCP connection, which turns read-only after the first connection's SET.
+    $server = FakeRedisServer::start(["error-after:3:READONLY You can't write against a read only replica.", 'serve']);
+    $persistence = ['persistent' => true, 'persistent_id' => Str::random()];
+    $overrides = match ($where) {
+        'connection' => $persistence,
+        'connection options' => ['options' => $persistence],
+        'global options' => [],
+    };
+    $options = $where === 'global options' ? $persistence : [];
+
+    try {
+        $connection = recoveringConnection($server, overrides: $overrides, options: $options);
+        recoveringConnection($server, overrides: $overrides, options: $options);
+        $connection->set('greeting', 'hello');
+
+        expect($connection->get('greeting'))->toBe('hello')
+            ->and($server->acceptedConnections())->toBe(2)
+            ->and($server->hungUp(1))->toBeFalse();
+    } finally {
+        ini_set('redis.pconnect.pooling_enabled', (string) $previous);
+    }
+})->with(['connection', 'connection options', 'global options']);
 
 it('runs a read once more on a rebuilt client after a protocol error, and closes the socket that went out of step', function (bool $persistent): void {
     $server = FakeRedisServer::start(['garbage-after:2', 'serve']);
@@ -90,6 +134,44 @@ it('gives up when the replayed read hits a protocol error too', function (): voi
     expect($server->commands())->toBe(['SELECT 0', 'GET greeting', 'SELECT 0', 'GET greeting', 'SELECT 0'])
         ->and($reported)->toBeEmpty();
 });
+
+it('rebuilds the client but does not replay a read that waited out the read timeout on a socket that just answered, since the server is stalling', function (): void {
+    // The connection sends no SELECT, so the server's silence meets the first command.
+    $server = FakeRedisServer::start(['stall', 'serve']);
+    $reported = [];
+    $connection = recoveringConnection($server, $reported, ['database' => null, 'read_timeout' => 1.0]);
+
+    expect(fn () => $connection->get('greeting'))->toThrowLostConnection();
+
+    // The PING proves the server accepted the rebuilt client's socket before the count is read.
+    expect($connection->ping())->toBeTrue()
+        ->and($server->acceptedConnections())->toBe(2)
+        ->and($server->commands())->toBe(['PING'])
+        ->and($reported)->toBeEmpty();
+});
+
+it('runs a read once more that waited out the read timeout on a socket that sat idle, since something between may have dropped it', function (Closure $local): void {
+    // The connection sends no SELECT, so the server's silence meets the first command.
+    $server = FakeRedisServer::start(['stall', 'serve']);
+    $reported = [];
+    $connection = recoveringConnection($server, $reported, ['database' => null, 'read_timeout' => 1.0]);
+
+    // A worker that sent nothing for a minute, as a NAT or a load balancer forgets an idle connection.
+    (fn (): float => $this->lastReplyAt -= 60)->call($connection);
+
+    // Work that never reaches the server says nothing about whether the socket still answers.
+    $local($connection);
+
+    expect($connection->get('greeting'))->toBeNull()
+        ->and($server->acceptedConnections())->toBe(2)
+        ->and($server->commands())->toBe(['GET greeting'])
+        ->and($reported)->toHaveCount(1)
+        ->and($reported[0]->reason)->toBe('read_error');
+})->with([
+    'nothing else' => [fn (ResilientPhpRedisConnection $redis): null => null],
+    'an option read' => [fn (ResilientPhpRedisConnection $redis): mixed => $redis->getOption(Redis::OPT_SERIALIZER)],
+    'an empty pipeline' => [fn (ResilientPhpRedisConnection $redis): Redis|array|false => $redis->pipeline(fn (): null => null)],
+]);
 
 it('rebuilds the client but never replays a write, because the server may already have run it', function (Closure $write, string $sent): void {
     $server = FakeRedisServer::start(['serve:1', 'serve']);
@@ -137,9 +219,33 @@ it('rethrows the command failure when the rebuild fails, since a lost write repl
     $client->connect('127.0.0.1', $server->port, 1.0);
     $client->select(0);
 
-    $connection = new ResilientPhpRedisConnection($client, fn (): never => throw new RuntimeException('Valkey is unreachable.'), []);
+    $events = [];
+    $connection = new ResilientPhpRedisConnection(
+        $client,
+        fn (): never => throw new RuntimeException('Valkey is unreachable.'),
+        [],
+        function (object $event) use (&$events): void {
+            $events[] = $event;
+        },
+    );
+    $connection->setName('cache');
+
+    $handled = [];
+    resolve(ExceptionHandler::class)->reportable(function (Throwable $e) use (&$handled): bool {
+        $handled[] = $e->getMessage();
+
+        return false;
+    });
 
     expect(fn () => $connection->set('job', 'payload'))->toThrowLostConnection();
+
+    // The failed rebuild goes out as an event, through the guard that keeps a listener from recovering Redis again,
+    // and the exception handler sees only the command's error, which the caller reports.
+    expect($handled)->toBeEmpty()
+        ->and($events)->toHaveCount(1)
+        ->and($events[0])->toBeInstanceOf(RebuildFailed::class)
+        ->and($events[0]->connection)->toBe('cache')
+        ->and($events[0]->reason)->toBeIn(['read_error', 'connection_lost']);
 });
 
 it('rethrows a lost connection as is when no connector can rebuild the client', function (): void {
@@ -247,6 +353,7 @@ it('returns false when phpredis cannot open the batch', function (): void {
     $client = Mockery::mock(Redis::class);
     $client->shouldReceive('pipeline')->andReturnFalse();
     $client->shouldReceive('multi')->andReturnFalse();
+    $client->shouldReceive('getTransferredBytes')->andReturn([0, 0]);
     $connection = new ResilientPhpRedisConnection($client, null, []);
 
     expect($connection->pipeline(fn (): null => null))->toBeFalse()
@@ -275,6 +382,38 @@ it('keeps the prefix a caller set on the client when it rebuilds it', function (
     expect($server->commands())->toBe(['SELECT 0', 'GET tenant:greeting', 'SELECT 0', 'GET tenant:greeting']);
 });
 
+it('keeps the numbers a caller told the serializer to leave alone when it rebuilds the client', function (): void {
+    $server = FakeRedisServer::start(['serve:1', 'serve']);
+    $connection = recoveringConnection($server);
+    $connection->client()->setOption(Redis::OPT_SERIALIZER, Redis::SERIALIZER_PHP);
+    $connection->client()->setOption(Redis::OPT_PACK_IGNORE_NUMBERS, true);
+
+    $connection->get('visits');
+    $connection->set('visits', 2);
+
+    expect(array_slice($server->commands(), -1))->toBe(['SET visits 2']);
+})->skip(! defined('Redis::OPT_PACK_IGNORE_NUMBERS'), 'This phpredis has no OPT_PACK_IGNORE_NUMBERS.');
+
+it('keeps the read timeout a caller set at runtime when it rebuilds the client, and the configured one or none otherwise', function (array $config, ?float $runtime, float $expected): void {
+    $server = FakeRedisServer::start(['serve:1', 'serve']);
+    $connection = recoveringConnection($server, overrides: $config);
+
+    if ($runtime !== null) {
+        $connection->client()->setOption(Redis::OPT_READ_TIMEOUT, $runtime);
+    }
+
+    $connection->get('greeting');
+
+    expect($connection->client()->getOption(Redis::OPT_READ_TIMEOUT))->toBe($expected);
+})->with([
+    'a runtime timeout' => [['read_timeout' => 0.8], 0.09, 0.09],
+    'the configured timeout' => [['read_timeout' => 0.8], null, 0.8],
+    // phpredis puts a zero read timeout on the socket as a poll that never waits, so every read fails at once, and its
+    // own reconnect skips zero as well. The rebuilt client goes back to the configured timeout, and the read succeeds.
+    'a runtime zero, which phpredis cannot read with' => [['read_timeout' => 0.8], 0.0, 0.8],
+    'no timeout, so PHP default_socket_timeout' => [[], null, 0.0],
+]);
+
 it('selects again the database a caller switched to', function (): void {
     $server = FakeRedisServer::start(['serve:2', 'serve']);
     $connection = recoveringConnection($server);
@@ -283,6 +422,27 @@ it('selects again the database a caller switched to', function (): void {
     $connection->get('greeting');
 
     expect($server->commands())->toBe(['SELECT 0', 'SELECT 3', 'GET greeting', 'SELECT 0', 'SELECT 3', 'GET greeting']);
+});
+
+it('selects again the database a raw SELECT switched to, which phpredis does not track on its own', function (): void {
+    $server = FakeRedisServer::start(['serve:3', 'serve']);
+    $connection = recoveringConnection($server);
+    $connection->executeRaw(['SELECT', '3']);
+
+    $connection->get('greeting');
+
+    expect($server->commands())->toBe(['SELECT 0', 'SELECT 3', 'SELECT 3', 'GET greeting', 'SELECT 0', 'SELECT 3', 'GET greeting']);
+});
+
+it('ignores a raw SELECT the server refused', function (): void {
+    $server = FakeRedisServer::start(['serve:2', 'serve']);
+    $connection = recoveringConnection($server);
+
+    expect($connection->executeRaw(['SELECT', '99']))->toBeFalse();
+
+    $connection->get('greeting');
+
+    expect($server->commands())->toBe(['SELECT 0', 'SELECT 99', 'GET greeting', 'SELECT 0', 'GET greeting']);
 });
 
 it('ignores a SELECT the server refused', function (): void {
@@ -423,6 +583,195 @@ it('counts a WATCH a pipeline sent through the connection once the pipeline runs
     expect(fn () => $connection->get('balance'))->toThrowLostConnection();
 
     expect($server->commands())->toBe(['SELECT 0', 'WATCH balance', 'GET balance', 'SELECT 0']);
+});
+
+it('never replays a read while a raw WATCH is open', function (): void {
+    $server = FakeRedisServer::start(['serve:2', 'serve']);
+    $connection = recoveringConnection($server);
+    $connection->executeRaw(['WATCH', 'balance']);
+
+    expect(fn () => $connection->get('balance'))->toThrowLostConnection();
+
+    expect($server->commands())->toBe(['SELECT 0', 'WATCH balance', 'GET balance', 'SELECT 0']);
+});
+
+it('replays a read again once a raw EXEC ended the WATCH', function (): void {
+    $server = FakeRedisServer::start(['serve:4', 'serve']);
+    $connection = recoveringConnection($server);
+    $connection->executeRaw(['WATCH', 'balance']);
+    $connection->executeRaw(['MULTI']);
+    $connection->executeRaw(['EXEC']);
+
+    expect($connection->get('balance'))->toBeNull()
+        ->and(array_slice($server->commands(), -3))->toBe(['GET balance', 'SELECT 0', 'GET balance']);
+});
+
+it('never replays a read queued after a raw MULTI, since it would run outside the transaction', function (): void {
+    $server = FakeRedisServer::start(['serve:2', 'serve']);
+    $connection = recoveringConnection($server);
+    $connection->executeRaw(['MULTI']);
+
+    expect(fn () => $connection->get('balance'))->toThrowLostConnection();
+
+    expect($server->commands())->toBe(['SELECT 0', 'MULTI', 'GET balance', 'SELECT 0']);
+});
+
+it('stops a transaction whose MULTI loses the connection after a pipeline that may have sent a WATCH', function (): void {
+    // The callback receives phpredis's client, so a WATCH it sends never passes through the connection.
+    $server = FakeRedisServer::start(['serve:2', 'serve']);
+    $connection = recoveringConnection($server);
+    $connection->pipeline(fn (Redis $pipeline): Redis|bool => $pipeline->watch('balance'));
+
+    $ran = false;
+    $callback = function () use (&$ran): void {
+        $ran = true;
+    };
+
+    expect(fn (): Redis|array|false => $connection->transaction($callback))->toThrowLostConnection();
+
+    expect($ran)->toBeFalse()
+        ->and($server->commands())->toBe(['SELECT 0', 'WATCH balance', 'MULTI', 'SELECT 0']);
+});
+
+it('stops a transaction after a read recovered on a rebuilt client, since a WATCH a pipeline sent died with the old socket', function (Closure $open): void {
+    // The callback receives phpredis's client, so a WATCH it sends never passes through the connection. The server resets
+    // the socket once the GET reaches it: a socket phpredis finds closed before it sends would make phpredis, which saw
+    // the WATCH, refuse to reconnect, and that error reaches the caller.
+    $server = FakeRedisServer::start(['serve-then-reset:2', 'serve']);
+    $connection = recoveringConnection($server);
+    $connection->pipeline(fn (Redis $pipeline): Redis|bool => $pipeline->watch('balance'));
+
+    expect($connection->get('balance'))->toBeNull()
+        ->and(fn () => $open($connection))->toThrow(LostWatchException::class);
+
+    // The read ran again on the new socket, and nothing of the transaction reached it.
+    expect($server->commands())->toBe(['SELECT 0', 'WATCH balance', 'GET balance', 'SELECT 0', 'GET balance']);
+
+    // Once said, the next transaction runs, as it would after the caller sent its WATCH again.
+    expect($connection->transaction(fn (Redis $transaction): Redis|bool => $transaction->ping()))->toBe([true]);
+})->with([
+    'transaction()' => [fn (ResilientPhpRedisConnection $redis): Redis|array|false => $redis->transaction(fn (Redis $transaction): Redis|bool => $transaction->ping())],
+    'multi()' => [fn (ResilientPhpRedisConnection $redis): mixed => $redis->multi()],
+    'a raw MULTI' => [fn (ResilientPhpRedisConnection $redis): mixed => $redis->executeRaw(['MULTI'])],
+]);
+
+it('runs a transaction once more after MULTI loses its connection when a transaction ended every WATCH since the last pipeline', function (): void {
+    $server = FakeRedisServer::start(['serve:5', 'serve']);
+    $connection = recoveringConnection($server);
+    $connection->pipeline(fn (Redis $pipeline): Redis|bool => $pipeline->watch('balance'));
+    $connection->transaction(fn (Redis $transaction): Redis|bool => $transaction->get('balance'));
+
+    expect($connection->transaction(fn (Redis $transaction): Redis|bool => $transaction->get('balance')))->toBe([false])
+        ->and(array_slice($server->commands(), -5))->toBe(['MULTI', 'SELECT 0', 'MULTI', 'GET balance', 'EXEC']);
+});
+
+it('replays a read again once a raw EXEC the server refused ended the raw transaction', function (): void {
+    $server = FakeRedisServer::start(['serve-rejecting:3:EXEC', 'serve']);
+    $connection = recoveringConnection($server);
+    $connection->executeRaw(['MULTI']);
+
+    expect(fn () => $connection->executeRaw(['EXEC']))->toThrow(RedisException::class, 'NOPERM');
+
+    expect($connection->get('balance'))->toBeNull()
+        ->and(array_slice($server->commands(), -3))->toBe(['GET balance', 'SELECT 0', 'GET balance']);
+});
+
+it('keeps the raw transaction open when the server refuses a raw DISCARD, so a queued read is not replayed', function (): void {
+    // The server answers the DISCARD with an error, which phpredis returns as false, and keeps queuing.
+    $server = FakeRedisServer::start(['serve-unknown:3:DISCARD', 'serve']);
+    $connection = recoveringConnection($server);
+    $connection->executeRaw(['MULTI']);
+
+    expect($connection->executeRaw(['DISCARD']))->toBeFalse()
+        ->and(fn () => $connection->get('balance'))->toThrowLostConnection();
+
+    expect($server->commands())->toBe(['SELECT 0', 'MULTI', 'DISCARD', 'GET balance', 'SELECT 0']);
+});
+
+it('never replays a read while a raw WATCH a pipeline sent through the connection is open', function (): void {
+    $server = FakeRedisServer::start(['serve:2', 'serve']);
+    $connection = recoveringConnection($server);
+    $connection->pipeline(function () use ($connection): void {
+        $connection->executeRaw(['WATCH', 'balance']);
+    });
+
+    expect(fn () => $connection->get('balance'))->toThrowLostConnection();
+
+    expect($server->commands())->toBe(['SELECT 0', 'WATCH balance', 'GET balance', 'SELECT 0']);
+});
+
+it('never replays a read queued after a raw MULTI a pipeline sent, which leaves the transaction open', function (): void {
+    $server = FakeRedisServer::start(['serve:2', 'serve']);
+    $connection = recoveringConnection($server);
+    $connection->pipeline(function () use ($connection): void {
+        $connection->executeRaw(['MULTI']);
+    });
+
+    expect(fn () => $connection->get('balance'))->toThrowLostConnection();
+
+    expect($server->commands())->toBe(['SELECT 0', 'MULTI', 'GET balance', 'SELECT 0']);
+});
+
+it('forgets a raw MULTI a pipeline queued when its callback threw before the pipeline ran', function (): void {
+    $server = FakeRedisServer::start(['serve:1', 'serve']);
+    $connection = recoveringConnection($server);
+
+    expect(fn (): Redis|array|false => $connection->pipeline(function () use ($connection): never {
+        $connection->executeRaw(['MULTI']);
+
+        throw new RuntimeException('The caller gave up.');
+    }))->toThrow(RuntimeException::class, 'The caller gave up.');
+
+    // The server never saw the MULTI, so a read that loses its connection runs again.
+    expect($connection->get('greeting'))->toBeNull()
+        ->and($server->commands())->toBe(['SELECT 0', 'GET greeting', 'SELECT 0', 'GET greeting']);
+});
+
+it('keeps the last confirmed database when a pipeline that queued a raw SELECT loses its connection', function (): void {
+    $server = FakeRedisServer::start(['serve:1', 'serve']);
+    $connection = recoveringConnection($server);
+
+    expect(fn (): Redis|array|false => $connection->pipeline(function () use ($connection): void {
+        $connection->executeRaw(['SELECT', '3']);
+    }))->toThrow(RedisException::class);
+
+    expect($connection->ping())->toBeTrue()
+        ->and($server->commands())->toBe(['SELECT 0', 'SELECT 3', 'SELECT 0', 'PING']);
+});
+
+it('asks the server for its database once the pipeline that queued a raw SELECT has run, not from inside it', function (): void {
+    $server = FakeRedisServer::start(['serve']);
+    $connection = recoveringConnection($server);
+
+    $results = $connection->pipeline(function () use ($connection): void {
+        $connection->executeRaw(['SELECT', '3']);
+        $connection->multi();
+        $connection->exec();
+    });
+
+    expect($results)->toHaveCount(2)
+        ->and(array_slice($server->commands(), -1))->toBe(['CLIENT INFO']);
+});
+
+it('runs a read once more that failed fast even when the rebuild took longer than a second', function (): void {
+    $server = FakeRedisServer::start(['serve:1', 'serve']);
+    $client = new Redis;
+    $client->connect('127.0.0.1', $server->port, 1.0);
+    $client->select(0);
+
+    $connector = function () use ($server): Redis {
+        // A connect retry that waited out its backoff, on the real clock, since the suite fakes Sleep.
+        time_nanosleep(1, 100_000_000);
+        $client = new Redis;
+        $client->connect('127.0.0.1', $server->port, 1.0);
+
+        return $client;
+    };
+
+    $connection = new ResilientPhpRedisConnection($client, $connector, []);
+
+    expect($connection->get('greeting'))->toBeNull()
+        ->and($server->commands())->toBe(['SELECT 0', 'GET greeting', 'GET greeting']);
 });
 
 it('runs a read once more after a disconnect ended the WATCH', function (): void {

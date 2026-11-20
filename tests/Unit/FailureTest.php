@@ -4,6 +4,13 @@ declare(strict_types=1);
 
 use Publicala\ResilientRedis\Failure;
 
+it('retries the temporary DNS failure musl reports as Try again, only in a getaddrinfo message', function (): void {
+    expect(Failure::retryableConnectReason(new RedisException('php_network_getaddresses: getaddrinfo for cache.example.com failed: Try again')))->toBe(Failure::TEMPORARY_DNS)
+        ->and(Failure::retryableConnectReason(new ErrorException('Redis::connect(): php_network_getaddresses: getaddrinfo for cache.example.com failed: Try again')))->toBe(Failure::TEMPORARY_DNS)
+        ->and(Failure::retryableConnectReason(new RedisException('ERR Try again')))->toBeNull()
+        ->and(Failure::retryableConnectReason(new RedisException('getaddrinfo for cache.example.com failed: Name or service not known. Try again')))->toBeNull();
+});
+
 it('names a connect failure that ends fast and may be retried', function (Throwable $e, string $reason): void {
     expect(Failure::retryableConnectReason($e))->toBe($reason);
 })->with([
@@ -62,6 +69,7 @@ it('names a command failure that means a lost connection', function (Throwable $
     'a reply that never came' => [new RedisException('read error on connection to cache.example.com:6379'), 'read_error'],
     'a reply cut short' => [new RedisException('Error while reading line from the server'), 'read_error'],
     'a server that went away' => [new RedisException('Redis server went away'), 'server_went_away'],
+    'a named server that went away' => [new RedisException('Redis server cache.example.com:6379 went away'), 'server_went_away'],
     'a primary demoted to replica' => [new RedisException("READONLY You can't write against a read only replica."), 'readonly_replica'],
     'a socket error' => [new RedisException('socket error on read socket'), 'socket_error'],
     'a reply stream out of step' => [new RedisException("protocol error, got 'X' as reply type byte\n"), 'protocol_error'],
@@ -75,6 +83,9 @@ it('leaves a command failure that is not a lost connection alone', function (Thr
     'a wrong type' => [new RedisException('WRONGTYPE Operation against a key holding the wrong kind of value')],
     'a listener error that mentions a socket' => [new ErrorException('socket error in an application listener')],
     'an exception from outside phpredis' => [new RuntimeException('Connection lost')],
+    'a module error reply that mentions a socket' => [new RedisException('MYMODULE socket closed by the backend')],
+    'a script error reply that says went away' => [new RedisException('UPSTREAM the session went away')],
+    'a script error reply that says the connection was lost' => [new RedisException('BACKEND Connection lost to the origin')],
 ]);
 
 it('recognizes the failure phpredis raises instead of reconnecting a socket that holds a WATCH', function (): void {
