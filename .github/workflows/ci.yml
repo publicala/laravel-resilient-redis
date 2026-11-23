@@ -147,4 +147,3 @@ jobs:
       contents: write
       checks: read
     uses: publicala/.github/.github/workflows/changelog-release.yml@478c7716036b7de4273b70bbaab779fd30f29248
-    secrets: inherit
