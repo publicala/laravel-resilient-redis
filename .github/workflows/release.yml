@@ -77,22 +77,24 @@ jobs:
           INTRO_SHA: ${{ steps.intro.outputs.sha }}
         run: |
           set -euo pipefail
+          # This run's ci-success passed before the job started, so github.sha is green.
+          ci_success() {
+            if [[ "$1" == "$GITHUB_SHA" ]]; then echo success; return; fi
+            gh api "repos/$GITHUB_REPOSITORY/commits/$1/check-runs?check_name=ci-success&filter=latest" \
+              --jq '.check_runs[0].conclusion // "missing"'
+          }
           # A tag an earlier run created stays the target while it ships the same
-          # package, so a retry after a failed release step finds it in place.
+          # package from a green commit, so a retry after a failed release step
+          # finds it in place. Any other tag falls through to present_elsewhere.
           if git rev-parse --verify "refs/tags/v$VERSION" >/dev/null 2>&1; then
             tag_commit=$(git rev-list -n 1 "v$VERSION")
-            if git diff --quiet "$INTRO_SHA" "$tag_commit" -- src config composer.json; then
+            if git diff --quiet "$INTRO_SHA" "$tag_commit" -- src config composer.json && [[ "$(ci_success "$tag_commit")" == "success" ]]; then
               echo "sha=$tag_commit" >> "$GITHUB_OUTPUT"
-              echo "v$VERSION is already at $tag_commit, which ships the same package as $INTRO_SHA."
+              echo "v$VERSION is already at $tag_commit, a green commit that ships the same package as $INTRO_SHA."
               exit 0
             fi
           fi
-          if [[ "$INTRO_SHA" == "$GITHUB_SHA" ]]; then
-            echo "sha=$INTRO_SHA" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          conclusion=$(gh api "repos/$GITHUB_REPOSITORY/commits/$INTRO_SHA/check-runs?check_name=ci-success&filter=latest" \
-            --jq '.check_runs[0].conclusion // "missing"')
+          conclusion=$(ci_success "$INTRO_SHA")
           if [[ "$conclusion" == "success" ]]; then
             echo "sha=$INTRO_SHA" >> "$GITHUB_OUTPUT"
             echo "ci-success passed on $INTRO_SHA."
