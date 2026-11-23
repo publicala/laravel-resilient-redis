@@ -61,33 +61,62 @@ jobs:
           echo "sha=$release_sha" >> "$GITHUB_OUTPUT"
           echo "Release commit for v$VERSION: $release_sha"
 
-      - name: Require a green CI run on the release commit
-        # This run tested github.sha. A manual run on a later main tags an older
-        # commit, so that commit's own ci-success check must have passed.
-        if: steps.intro.outputs.sha != github.sha
+      - name: Pick the commit to tag
+        # The introduction commit, when its own ci-success passed. This run tested
+        # github.sha, so the introduction commit passes when it is github.sha.
+        # When it failed, github.sha stands in for it if the package surface
+        # (src/, config/, composer.json, the paths ci.yml's package_surface
+        # filter names) is identical between the two: the same package then
+        # ships from a commit whose CI is green. Re-running CI on the failed
+        # commit cannot help when the fix is in a workflow, since a re-run uses
+        # that commit's own workflow files. An existing tag keeps its commit.
+        id: target
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.ver.outputs.version }}
-          RELEASE_SHA: ${{ steps.intro.outputs.sha }}
+          INTRO_SHA: ${{ steps.intro.outputs.sha }}
         run: |
           set -euo pipefail
-          conclusion=$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_SHA/check-runs?check_name=ci-success&filter=latest" \
-            --jq '.check_runs[0].conclusion // "missing"')
-          if [[ "$conclusion" != "success" ]]; then
-            echo "::error::v$VERSION would tag $RELEASE_SHA, whose ci-success check is '$conclusion'. Rerun that commit's CI if the failure was a flake, or ship the fix under a new version."
-            exit 1
+          # This run's ci-success passed before the job started, so github.sha is green.
+          ci_success() {
+            if [[ "$1" == "$GITHUB_SHA" ]]; then echo success; return; fi
+            gh api "repos/$GITHUB_REPOSITORY/commits/$1/check-runs?check_name=ci-success&filter=latest" \
+              --jq '.check_runs[0].conclusion // "missing"'
+          }
+          # A tag an earlier run created stays the target while it ships the same
+          # package from a green commit, so a retry after a failed release step
+          # finds it in place. Any other tag falls through to present_elsewhere.
+          if git rev-parse --verify "refs/tags/v$VERSION" >/dev/null 2>&1; then
+            tag_commit=$(git rev-list -n 1 "v$VERSION")
+            if git diff --quiet "$INTRO_SHA" "$tag_commit" -- src config composer.json && [[ "$(ci_success "$tag_commit")" == "success" ]]; then
+              echo "sha=$tag_commit" >> "$GITHUB_OUTPUT"
+              echo "v$VERSION is already at $tag_commit, a green commit that ships the same package as $INTRO_SHA."
+              exit 0
+            fi
           fi
-          echo "ci-success passed on $RELEASE_SHA."
+          conclusion=$(ci_success "$INTRO_SHA")
+          if [[ "$conclusion" == "success" ]]; then
+            echo "sha=$INTRO_SHA" >> "$GITHUB_OUTPUT"
+            echo "ci-success passed on $INTRO_SHA."
+            exit 0
+          fi
+          if git diff --quiet "$INTRO_SHA" "$GITHUB_SHA" -- src config composer.json; then
+            echo "sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+            echo "ci-success is '$conclusion' on $INTRO_SHA, and $GITHUB_SHA ships the same package with a green run, so v$VERSION tags $GITHUB_SHA."
+            exit 0
+          fi
+          echo "::error::v$VERSION would tag $INTRO_SHA, whose ci-success check is '$conclusion', and the package changed after it. Rerun that commit's CI if the failure was not in a workflow, or ship the fix under a new version."
+          exit 1
 
       - name: Check immutable tag state
         id: tag
         env:
           VERSION: ${{ steps.ver.outputs.version }}
-          RELEASE_SHA: ${{ steps.intro.outputs.sha }}
+          RELEASE_SHA: ${{ steps.target.outputs.sha }}
         run: |
           set -euo pipefail
-          # Three outcomes, compared against the introduction commit (not
-          # GITHUB_SHA, since dispatches on main may run from HEAD past the
+          # Three outcomes, compared against the commit the previous step picked
+          # (not GITHUB_SHA, since dispatches on main may run from HEAD past the
           # release commit):
           #   absent            → create the tag at RELEASE_SHA
           #   present_here      → tag already at RELEASE_SHA. Reconcile
@@ -107,7 +136,7 @@ jobs:
             echo "v$VERSION already at $RELEASE_SHA — reconciling downstream artifacts."
           else
             echo "state=present_elsewhere" >> "$GITHUB_OUTPUT"
-            echo "v$VERSION already at $tag_commit (introduction commit is $RELEASE_SHA) — out-of-band state, no-op."
+            echo "v$VERSION already at $tag_commit (release commit is $RELEASE_SHA) — out-of-band state, no-op."
           fi
 
       - name: Extract release notes
@@ -135,7 +164,7 @@ jobs:
         if: steps.tag.outputs.state == 'absent'
         env:
           VERSION: ${{ steps.ver.outputs.version }}
-          RELEASE_SHA: ${{ steps.intro.outputs.sha }}
+          RELEASE_SHA: ${{ steps.target.outputs.sha }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
