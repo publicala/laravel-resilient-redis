@@ -4,11 +4,21 @@ All notable changes to `publicala/laravel-resilient-redis`.
 
 The top `## ` header is always the most recent version (`## vX.Y.Z`, exact), and that header is the source of truth the release workflow reads. Adding a new top block to this file is what cuts a release.
 
-## v3.4.0
+## v3.4.1
+
+v3.4.0 was never tagged, because its CI run failed on an arm64 test job that hung. Its changes ship in this release.
 
 ### Added
 
 - **A connect that fails on its last attempt dispatches `ConnectFailed`.** A failed connect reached the exception handler with no duration, so a connect timeout could not be told apart from a fast failure, nor counted against the attempts it took. The event carries the host, port, database, `persistent`, the attempts, the time from the first attempt to the end of the last one, the length of the last attempt and a reason (`timed_out`, a retry reason, or `unclassified`). It goes through the same guard as the recovery events and is logged as `redis.connect.failed` with `log_recoveries` on. The connect's own error is still rethrown.
+
+### Changed
+
+- **The arm64 test jobs run on the latest PHP 8.3 patch release.** setup-php kept the runner image's PHP 8.3.6, which peeks at a TLS stream on a blocking socket, so a TLS test could hang until the job timed out. No change for consumers.
+
+## v3.4.0
+
+Never tagged. Its changes ship in v3.4.1.
 
 ## v3.3.0
 
