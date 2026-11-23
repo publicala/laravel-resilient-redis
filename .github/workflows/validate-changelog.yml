@@ -28,7 +28,7 @@ jobs:
           fi
           # The release publishes this block as its notes and stops before the tag
           # when it is empty, so an empty block would hold the version back for good.
-          notes=$(awk '/^## /{ if (seen) exit; seen = 1; next } seen && NF { print; exit }' CHANGELOG.md)
+          notes=$(awk '/^## /{ if (seen) exit; seen = 1; next } seen && /[^[:space:]]/ { print; exit }' CHANGELOG.md)
           if [[ -z "$notes" ]]; then
             echo "::error file=CHANGELOG.md::$header has no release notes under it"
             exit 1
