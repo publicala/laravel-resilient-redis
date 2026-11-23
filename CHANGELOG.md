@@ -4,6 +4,14 @@ All notable changes to `publicala/laravel-resilient-redis`.
 
 The top `## ` header is always the most recent version (`## vX.Y.Z`, exact), and that header is the source of truth the release workflow reads. Adding a new top block to this file is what cuts a release.
 
+## v3.4.1
+
+v3.4.0 was never tagged, because its CI run failed on an arm64 test job that hung. This release is the first to carry its `ConnectFailed` event, listed under v3.4.0 below.
+
+### Changed
+
+- **The arm64 test jobs run on the latest PHP 8.3 patch release.** setup-php kept the runner image's PHP 8.3.6, which peeks at a TLS stream on a blocking socket, so a TLS test could hang until the job timed out. No change for consumers.
+
 ## v3.4.0
 
 ### Added
