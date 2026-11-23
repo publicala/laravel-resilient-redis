@@ -64,10 +64,10 @@ jobs:
       - name: Pick the commit to tag
         # The introduction commit, when its own ci-success passed. This run tested
         # github.sha, so the introduction commit passes when it is github.sha.
-        # When it failed, github.sha stands in for it if the package surface
-        # (src/, config/, composer.json, the paths ci.yml's package_surface
-        # filter names) is identical between the two: the same package then
-        # ships from a commit whose CI is green. Re-running CI on the failed
+        # When it failed, github.sha stands in for it if both commits ship the
+        # same package: the same git archive, which is what Composer installs
+        # (every file .gitattributes does not mark export-ignore). The package
+        # then ships from a commit whose CI is green. Re-running CI on the failed
         # commit cannot help when the fix is in a workflow, since a re-run uses
         # that commit's own workflow files. An existing tag keeps its commit.
         id: target
@@ -83,12 +83,24 @@ jobs:
             gh api "repos/$GITHUB_REPOSITORY/commits/$1/check-runs?check_name=ci-success&filter=latest" \
               --jq '.check_runs[0].conclusion // "missing"'
           }
+          # Each archive applies its own commit's .gitattributes. A failed archive
+          # reads as a different package, so the step refuses rather than guess.
+          same_package() {
+            local a b
+            a=$(mktemp -d)
+            b=$(mktemp -d)
+            git archive "$1" | tar -x -C "$a" || return 1
+            git archive "$2" | tar -x -C "$b" || return 1
+            diff -r --no-dereference "$a" "$b" >/dev/null || return 1
+            # diff reads contents only, so the file modes are compared on their own.
+            [[ "$(cd "$a" && find . -printf '%m %p\n' | sort)" == "$(cd "$b" && find . -printf '%m %p\n' | sort)" ]]
+          }
           # A tag an earlier run created stays the target while it ships the same
           # package from a green commit, so a retry after a failed release step
           # finds it in place. Any other tag falls through to present_elsewhere.
           if git rev-parse --verify "refs/tags/v$VERSION" >/dev/null 2>&1; then
             tag_commit=$(git rev-list -n 1 "v$VERSION")
-            if git diff --quiet "$INTRO_SHA" "$tag_commit" -- src config composer.json && [[ "$(ci_success "$tag_commit")" == "success" ]]; then
+            if same_package "$INTRO_SHA" "$tag_commit" && [[ "$(ci_success "$tag_commit")" == "success" ]]; then
               echo "sha=$tag_commit" >> "$GITHUB_OUTPUT"
               echo "v$VERSION is already at $tag_commit, a green commit that ships the same package as $INTRO_SHA."
               exit 0
@@ -100,7 +112,7 @@ jobs:
             echo "ci-success passed on $INTRO_SHA."
             exit 0
           fi
-          if git diff --quiet "$INTRO_SHA" "$GITHUB_SHA" -- src config composer.json; then
+          if same_package "$INTRO_SHA" "$GITHUB_SHA"; then
             echo "sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
             echo "ci-success is '$conclusion' on $INTRO_SHA, and $GITHUB_SHA ships the same package with a green run, so v$VERSION tags $GITHUB_SHA."
             exit 0
