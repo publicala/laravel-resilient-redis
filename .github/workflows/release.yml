@@ -91,7 +91,9 @@ jobs:
             b=$(mktemp -d)
             git archive "$1" | tar -x -C "$a" || return 1
             git archive "$2" | tar -x -C "$b" || return 1
-            diff -r "$a" "$b" >/dev/null
+            diff -r --no-dereference "$a" "$b" >/dev/null || return 1
+            # diff reads contents only, so the file modes are compared on their own.
+            [[ "$(cd "$a" && find . -printf '%m %p\n' | sort)" == "$(cd "$b" && find . -printf '%m %p\n' | sort)" ]]
           }
           # A tag an earlier run created stays the target while it ships the same
           # package from a green commit, so a retry after a failed release step
