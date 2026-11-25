@@ -657,6 +657,91 @@ it('stops a transaction after a read recovered on a rebuilt client, since a WATC
     'a raw MULTI' => [fn (ResilientPhpRedisConnection $redis): mixed => $redis->executeRaw(['MULTI'])],
 ]);
 
+it('stops a transaction after a read recovered on a rebuilt client whenever a pipeline before it may have sent a WATCH', function (Closure $pipelines, int $sent): void {
+    // The server resets the socket 50 ms after the GET reaches it, as in the test above.
+    $server = FakeRedisServer::start(['serve-then-reset:'.($sent + 1).':50', 'serve']);
+    $connection = recoveringConnection($server);
+    $pipelines($connection);
+
+    expect($connection->get('balance'))->toBeNull()
+        ->and(fn (): Redis|array|false => $connection->transaction(fn (Redis $transaction): Redis|bool => $transaction->ping()))->toThrow(LostWatchException::class);
+
+    expect(array_slice($server->commands(), -3))->toBe(['GET balance', 'SELECT 0', 'GET balance']);
+})->with([
+    'a raw WATCH' => [fn (ResilientPhpRedisConnection $redis): array|false => $redis->pipeline(fn (Redis $pipeline): mixed => $pipeline->rawCommand('WATCH', 'balance')), 1],
+    'a WATCH followed by reads' => [function (ResilientPhpRedisConnection $redis): void {
+        $redis->pipeline(function (Redis $pipeline): void {
+            $pipeline->watch('balance');
+            $pipeline->get('greeting');
+        });
+    }, 2],
+    'a WATCH after a transaction through the connection' => [function (ResilientPhpRedisConnection $redis): void {
+        $redis->pipeline(function (Redis $pipeline) use ($redis): void {
+            $redis->transaction(fn (Redis $transaction): Redis|int|false => $transaction->incr('visits'));
+            $pipeline->watch('balance');
+        });
+    }, 4],
+    'a WATCH in a pipeline the callback ran itself' => [function (ResilientPhpRedisConnection $redis): void {
+        $redis->pipeline(function (Redis $pipeline): void {
+            $pipeline->watch('balance');
+            $pipeline->exec();
+            $pipeline->pipeline();
+            $pipeline->get('greeting');
+        });
+    }, 2],
+    'a WATCH in a pipeline opened without a callback' => [function (ResilientPhpRedisConnection $redis): void {
+        $pipeline = $redis->pipeline();
+        $pipeline->watch('balance');
+        $pipeline->exec();
+    }, 1],
+    'a write, whose reply reads like that of a WATCH' => [fn (ResilientPhpRedisConnection $redis): array|false => $redis->pipeline(fn (Redis $pipeline): Redis|bool => $pipeline->set('greeting', 'hello')), 1],
+    'a WATCH, then a pipeline of reads' => [function (ResilientPhpRedisConnection $redis): void {
+        $redis->pipeline(fn (Redis $pipeline): Redis|bool => $pipeline->watch('balance'));
+        $redis->pipeline(fn (Redis $pipeline): Redis|string|false => $pipeline->get('greeting'));
+    }, 2],
+]);
+
+it('runs a transaction after a read recovered on a rebuilt client when the pipelines before it show no WATCH', function (Closure $pipelines, int $sent, Closure $open): void {
+    // The server resets the socket 50 ms after the GET reaches it, as in the tests above.
+    $server = FakeRedisServer::start(['serve-then-reset:'.($sent + 1).':50', 'serve']);
+    $connection = recoveringConnection($server);
+    $pipelines($connection);
+
+    expect($connection->get('balance'))->toBeNull();
+
+    $open($connection);
+
+    expect(array_slice($server->commands(), $sent + 1, 4))->toBe(['GET balance', 'SELECT 0', 'GET balance', 'MULTI']);
+})->with([
+    'reads' => [fn (ResilientPhpRedisConnection $redis): array|false => $redis->pipeline(fn (Redis $pipeline): Redis|string|false => $pipeline->get('greeting')), 1],
+    'a transaction through the connection, as the Redis queue pushes a bulk of jobs' => [
+        fn (ResilientPhpRedisConnection $redis): array|false => $redis->pipeline(fn (): Redis|array|false => $redis->transaction(fn (Redis $transaction): Redis|int|false => $transaction->incr('visits'))),
+        3,
+    ],
+])->with([
+    'transaction()' => [fn (ResilientPhpRedisConnection $redis): Redis|array|false => $redis->transaction(fn (Redis $transaction): Redis|bool => $transaction->ping())],
+    'multi(), as the cache stores many values' => [function (ResilientPhpRedisConnection $redis): void {
+        $redis->multi();
+        $redis->exec();
+    }],
+    'a raw MULTI' => [fn (ResilientPhpRedisConnection $redis): mixed => $redis->executeRaw(['MULTI'])],
+]);
+
+it('opens a transaction again after MULTI loses the connection when the pipeline before it showed no WATCH', function (): void {
+    $server = FakeRedisServer::start(['serve-then-reset:2', 'serve']);
+    $connection = recoveringConnection($server);
+    $connection->pipeline(fn (Redis $pipeline): Redis|string|false => $pipeline->get('greeting'));
+
+    $ran = false;
+    $callback = function () use (&$ran): void {
+        $ran = true;
+    };
+
+    expect($connection->transaction($callback))->toBe([])
+        ->and($ran)->toBeTrue()
+        ->and($server->commands())->toBe(['SELECT 0', 'GET greeting', 'MULTI', 'SELECT 0', 'MULTI', 'EXEC']);
+});
+
 it('runs a transaction once more after MULTI loses its connection when a transaction ended every WATCH since the last pipeline', function (): void {
     $server = FakeRedisServer::start(['serve:5', 'serve']);
     $connection = recoveringConnection($server);
