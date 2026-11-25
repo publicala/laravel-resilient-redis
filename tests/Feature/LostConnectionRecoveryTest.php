@@ -701,6 +701,47 @@ it('stops a transaction after a read recovered on a rebuilt client whenever a pi
     }, 2],
 ]);
 
+it('runs a transaction after a read recovered on a rebuilt client when the pipelines before it show no WATCH', function (Closure $pipelines, int $sent, Closure $open): void {
+    // The server resets the socket 50 ms after the GET reaches it, as in the tests above.
+    $server = FakeRedisServer::start(['serve-then-reset:'.($sent + 1).':50', 'serve']);
+    $connection = recoveringConnection($server);
+    $pipelines($connection);
+
+    expect($connection->get('balance'))->toBeNull();
+
+    $open($connection);
+
+    expect(array_slice($server->commands(), $sent + 1, 4))->toBe(['GET balance', 'SELECT 0', 'GET balance', 'MULTI']);
+})->with([
+    'reads' => [fn (ResilientPhpRedisConnection $redis): array|false => $redis->pipeline(fn (Redis $pipeline): Redis|string|false => $pipeline->get('greeting')), 1],
+    'a transaction through the connection, as the Redis queue pushes a bulk of jobs' => [
+        fn (ResilientPhpRedisConnection $redis): array|false => $redis->pipeline(fn (): Redis|array|false => $redis->transaction(fn (Redis $transaction): Redis|int|false => $transaction->incr('visits'))),
+        3,
+    ],
+])->with([
+    'transaction()' => [fn (ResilientPhpRedisConnection $redis): Redis|array|false => $redis->transaction(fn (Redis $transaction): Redis|bool => $transaction->ping())],
+    'multi(), as the cache stores many values' => [function (ResilientPhpRedisConnection $redis): void {
+        $redis->multi();
+        $redis->exec();
+    }],
+    'a raw MULTI' => [fn (ResilientPhpRedisConnection $redis): mixed => $redis->executeRaw(['MULTI'])],
+]);
+
+it('opens a transaction again after MULTI loses the connection when the pipeline before it showed no WATCH', function (): void {
+    $server = FakeRedisServer::start(['serve-then-reset:2', 'serve']);
+    $connection = recoveringConnection($server);
+    $connection->pipeline(fn (Redis $pipeline): Redis|string|false => $pipeline->get('greeting'));
+
+    $ran = false;
+    $callback = function () use (&$ran): void {
+        $ran = true;
+    };
+
+    expect($connection->transaction($callback))->toBe([])
+        ->and($ran)->toBeTrue()
+        ->and($server->commands())->toBe(['SELECT 0', 'GET greeting', 'MULTI', 'SELECT 0', 'MULTI', 'EXEC']);
+});
+
 it('runs a transaction once more after MULTI loses its connection when a transaction ended every WATCH since the last pipeline', function (): void {
     $server = FakeRedisServer::start(['serve:5', 'serve']);
     $connection = recoveringConnection($server);

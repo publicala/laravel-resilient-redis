@@ -73,8 +73,8 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
     private bool $watchQueued = false;
 
     /**
-     * Whether a pipeline handed phpredis's client to a caller since the server last cleared every WATCH, so a WATCH may be open
-     * that never passed through the connection.
+     * Whether a pipeline that may have sent a WATCH on phpredis's client ran since the server last cleared every WATCH, so a
+     * WATCH may be open that never passed through the connection.
      */
     private bool $watchMayBeOpen = false;
 
@@ -224,9 +224,29 @@ final class ResilientPhpRedisConnection extends PhpRedisConnection
         $pipeline = $this->openBatch(fn (): Redis|false => $this->client()->pipeline(), transaction: false);
 
         // The caller gets phpredis's client, through the callback or as the return value, and may send a WATCH on it.
-        $this->watchMayBeOpen = $this->watchMayBeOpen || $pipeline !== false;
+        $watchMayBeOpen = $this->watchMayBeOpen;
+        $this->watchMayBeOpen = $watchMayBeOpen || $pipeline !== false;
 
-        return $callback === null || $pipeline === false ? $pipeline : $this->executeBatch($pipeline, $callback, transaction: false);
+        if ($callback === null || $pipeline === false) {
+            return $pipeline;
+        }
+
+        $sent = $pipeline->getTransferredBytes()[0];
+        $sentOutsideBatch = false;
+
+        $result = $this->executeBatch($pipeline, function (Redis $batch) use ($callback, $sent, &$sentOutsideBatch): void {
+            $callback($batch);
+
+            // phpredis sends a pipeline only on EXEC, so bytes sent before it went out with a pipeline the callback ran itself.
+            $sentOutsideBatch = $batch->getTransferredBytes()[0] !== $sent;
+        }, transaction: false);
+
+        // phpredis returns an accepted WATCH as true, and a pipeline that queued one inside a MULTI fails as a whole.
+        if (is_array($result) && ! $sentOutsideBatch && ! in_array(true, $result, true)) {
+            $this->watchMayBeOpen = $watchMayBeOpen;
+        }
+
+        return $result;
     }
 
     /**
