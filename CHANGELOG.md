@@ -4,6 +4,12 @@ All notable changes to `publicala/laravel-resilient-redis`.
 
 The top `## ` header is always the most recent version (`## vX.Y.Z`, exact), and that header is the source of truth the release workflow reads. Adding a new top block to this file is what cuts a release.
 
+## v3.5.0
+
+### Changed
+
+- **A pipeline whose replies show no `WATCH` no longer stops the next transaction.** Every pipeline counted as one that may have sent a `WATCH` on phpredis's client, so after a read recovered on a rebuilt client, the next `MULTI` threw `LostWatchException` even when no pipeline had watched anything. The Redis queue's bulk push (`Queue::bulk()`, `Bus::batch()`) runs a transaction inside a pipeline, so the first batch dispatched after a recovered read failed, and so did the next `Cache::putMany()`. A pipeline now counts only when it ran without a callback, failed, returned a reply that is `true` (phpredis's reply to an accepted `WATCH`, and to a write such as `SET`), or its callback ran a pipeline of its own on the client. A transaction whose `MULTI` loses the connection after a pipeline that does not count is opened again on the rebuilt client.
+
 ## v3.4.1
 
 v3.4.0 was never tagged, because its CI run failed on an arm64 test job that hung. Its changes ship in this release.

@@ -7,6 +7,7 @@ use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Redis;
 use Illuminate\Support\Str;
 use Publicala\ResilientRedis\ResilientPhpRedisConnector;
+use Redis as PhpRedis;
 
 beforeEach(function (): void {
     config(['cache.default' => 'redis', 'cache.stores.redis.connection' => 'default', 'cache.stores.redis.lock_connection' => 'default']);
@@ -42,6 +43,21 @@ it('runs a transaction inside a pipeline, as the Redis queue does to push a bulk
         ->and($redis->get('greeting'))->toBe('hello')
         ->and(Queue::connection('redis')->size())->toBe(2);
 });
+
+it('answers a WATCH a pipeline sends with true, which tells the connection the watch may still be open', function (bool $literal): void {
+    $redis = Redis::connection();
+    $redis->client()->setOption(PhpRedis::OPT_REPLY_LITERAL, $literal);
+
+    $replies = $redis->pipeline(function (PhpRedis $pipeline): void {
+        $pipeline->watch('balance');
+        $pipeline->rawCommand('WATCH', 'balance');
+    });
+
+    expect($replies)->toBe([true, true]);
+})->with([
+    'status replies as booleans' => false,
+    'status replies as text' => true,
+]);
 
 it('passes an int where phpredis types a string, as Laravel does', function (): void {
     $redis = Redis::connection();
