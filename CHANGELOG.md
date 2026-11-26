@@ -4,6 +4,12 @@ All notable changes to `publicala/laravel-resilient-redis`.
 
 The top `## ` header is always the most recent version (`## vX.Y.Z`, exact), and that header is the source of truth the release workflow reads. Adding a new top block to this file is what cuts a release.
 
+## v3.5.1
+
+### Changed
+
+- **PHPStan 2.3.7 or later in the development toolchain.** The type coverage step works on PHPStan 2.3.7, so the hold below 2.3.6 that v3.0.3 added is lifted. The constraint is a development dependency, so applications that install the package resolve nothing new.
+
 ## v3.5.0
 
 ### Changed
